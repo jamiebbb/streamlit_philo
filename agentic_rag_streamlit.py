@@ -41,7 +41,7 @@ vector_store = SupabaseVectorStore(
 )
  
 # initiating llm
-llm = ChatOpenAI(model="gpt-4o",temperature=0)
+llm = ChatOpenAI(model="gpt-4o-mini",temperature=0)
 
 # pulling prompt from hub
 prompt = hub.pull("hwchase17/openai-functions-agent")
@@ -69,7 +69,7 @@ agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=True)
 
 # initiating streamlit app
 st.set_page_config(page_title="Agentic RAG Chatbot", page_icon="🦜")
-st.title("🦜 Agentic RAG Chatbot")
+st.title("🦜 Philo - Agentic RAG Chatbot")
 
 # initialize chat history
 if "messages" not in st.session_state:
@@ -86,7 +86,7 @@ for message in st.session_state.messages:
 
 
 # create the bar where we can type messages
-user_question = st.chat_input("How are you?")
+user_question = st.chat_input("How can I assist you?")
 
 
 # did the user submit a prompt?

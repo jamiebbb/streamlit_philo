@@ -132,4 +132,64 @@ class FeedbackHandler:
             return stats
         except Exception as e:
             print(f"Error getting feedback stats: {e}")
-            return None 
+            return None
+            
+    def get_relevant_feedback(self, query, similarity_threshold=0.7):
+        """Retrieve relevant feedback for a given query.
+        
+        This method searches for past feedback that might be relevant to the current query,
+        especially looking for detailed feedback that contains corrections.
+        
+        Args:
+            query: The current user query
+            similarity_threshold: Minimum similarity score to consider feedback relevant
+            
+        Returns:
+            A list of relevant feedback entries with corrections
+        """
+        try:
+            # Get all detailed feedback with comments
+            result = self.supabase.table("feedback")\
+                .select("query, response, metadata")\
+                .eq("feedback", "detailed")\
+                .execute()
+                
+            detailed_feedback = result.data
+            relevant_feedback = []
+            
+            # For now, use simple keyword matching
+            # In a production system, you'd use embeddings and semantic search
+            query_keywords = set(query.lower().split())
+            
+            for item in detailed_feedback:
+                past_query = item.get("query", "").lower()
+                # Simple keyword overlap check
+                past_keywords = set(past_query.split())
+                common_keywords = query_keywords.intersection(past_keywords)
+                
+                # Calculate simple similarity score
+                similarity = len(common_keywords) / max(len(query_keywords), len(past_keywords))
+                
+                # If the queries are similar and there's a comment in the metadata
+                if similarity >= similarity_threshold:
+                    metadata = item.get("metadata", {})
+                    comment = metadata.get("comment", "")
+                    rating = metadata.get("rating", 0)
+                    
+                    # Only include feedback with actual comments and low ratings
+                    if comment and rating <= 3:
+                        relevant_feedback.append({
+                            "past_query": item.get("query"),
+                            "past_response": item.get("response"),
+                            "comment": comment,
+                            "rating": rating,
+                            "similarity": similarity
+                        })
+            
+            # Sort by similarity
+            relevant_feedback.sort(key=lambda x: x["similarity"], reverse=True)
+            return relevant_feedback
+            
+        except Exception as e:
+            print(f"Error retrieving relevant feedback: {e}")
+            return [] 

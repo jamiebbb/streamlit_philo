@@ -137,10 +137,30 @@ if user_question:
 
         st.session_state.messages.append(HumanMessage(user_question))
 
-
+    # Look for relevant feedback that might contain corrections
+    relevant_feedback = feedback_handler.get_relevant_feedback(user_question)
+    
     # invoking the agent
     with st.spinner("Thinking..."):
-        result = agent_executor.invoke({"input": user_question, "chat_history":st.session_state.messages})
+        # Prepare input with feedback if available
+        input_data = {"input": user_question, "chat_history": st.session_state.messages}
+        
+        # If we have relevant feedback, include it in the input
+        if relevant_feedback:
+            # Add relevant feedback context to the input
+            feedback_context = "\n\nIMPORTANT: Users have provided the following corrections to past similar questions:\n"
+            for i, feedback in enumerate(relevant_feedback[:3]):  # Limit to top 3 most relevant
+                feedback_context += f"\n{i+1}. Past query: '{feedback['past_query']}'\n"
+                feedback_context += f"   User correction: '{feedback['comment']}'\n"
+            
+            # Combine the user question with feedback context
+            enhanced_question = f"{user_question}\n\n{feedback_context}\n\nPlease take these corrections into account in your response."
+            input_data["input"] = enhanced_question
+            
+            # Add a small note to the UI that feedback is being used
+            st.info("📝 Incorporating past feedback into this response", icon="ℹ️")
+        
+        result = agent_executor.invoke(input_data)
 
     ai_message = result["output"]
 
@@ -151,9 +171,19 @@ if user_question:
         
         # Add feedback buttons and detailed feedback for the new response
         feedback_handler.add_feedback_buttons(user_question, ai_message)
-        feedback_handler.add_detailed_feedback(user_question, ai_message)
+        
+        # Make detailed feedback more prominent when corrections are needed
+        st.write("📝 **Notice something incorrect?** Expand below to provide a correction:")
+        with st.expander("Provide a correction or detailed feedback"):
+            st.write("Your feedback helps improve future answers. If the response contains incorrect information, please explain the correct information below.")
+            rating = st.slider("Rate this response (1-5)", 1, 5, 3)
+            comment = st.text_area("Correction or comment", placeholder="Explain what's incorrect and provide the right information...")
+            
+            if st.button("Submit Correction", type="primary"):
+                feedback_handler.store_detailed_feedback(user_question, ai_message, rating, comment)
+                st.success("Thank you for your correction! This will be used to improve future responses.")
 
 # Add a footer
 st.markdown("---")
-st.markdown("*Your feedback helps us improve! Please rate our responses.*")
+st.markdown("*Your feedback helps us improve! Please rate our responses and provide corrections when needed.*")
 

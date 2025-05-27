@@ -167,7 +167,7 @@ with tab1:
                             st.info("Thanks for your feedback!")
                     
                     # Detailed feedback form
-                    with st.expander("💬 Provide detailed feedback", expanded=False, key=f"feedback_expander_{message_key}"):
+                    with st.expander("💬 Provide detailed feedback", expanded=False):
                         col1, col2 = st.columns([1, 3])
                         with col1:
                             rating = st.slider("Rating", 1, 5, 3, help="Rate the response quality", key=f"rating_{message_key}")

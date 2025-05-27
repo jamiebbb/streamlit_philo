@@ -243,8 +243,10 @@ with tab2:
                     "Title": row.get("title", "Unknown"),
                     "Chunks": row.get("chunks", 0),
                     "Author": row.get("author", "Unknown"),
+                    "Summary": str(row.get("summary", ""))[:100] + "..." if len(str(row.get("summary", ""))) > 100 else str(row.get("summary", "")),
                     "Type": row.get("type", "Unknown"),
                     "Genre": row.get("genre", "Unknown"),
+                    "Topic": row.get("topic", "Unknown"),
                     "Difficulty": row.get("difficulty", "Unknown"),
                     "Source Type": row.get("source_type", "Unknown"),
                     "Tags": str(row.get("tags", "Unknown"))[:50] + "..." if len(str(row.get("tags", "Unknown"))) > 50 else str(row.get("tags", "Unknown"))
@@ -363,7 +365,7 @@ with tab3:
     # Create sub-tabs for different upload types
     upload_tab1, upload_tab2 = st.tabs(["📄 PDF Upload", "🎥 YouTube URL"])
     
-    def add_document_to_csv(title, chunks, author, doc_type, genre, difficulty, source_type, tags):
+    def add_document_to_csv(title, chunks, author, doc_type, genre, difficulty, source_type, tags, summary="", topic=""):
         """Add a new document entry to the CSV file."""
         try:
             import pandas as pd
@@ -374,8 +376,10 @@ with tab3:
                 "title": title,
                 "chunks": chunks,
                 "author": author,
+                "summary": summary,
                 "type": doc_type,
                 "genre": genre,
+                "topic": topic,
                 "difficulty": difficulty,
                 "source_type": source_type,
                 "tags": tags
@@ -385,7 +389,7 @@ with tab3:
             if os.path.exists(csv_file):
                 df = pd.read_csv(csv_file)
             else:
-                df = pd.DataFrame(columns=["title", "chunks", "author", "type", "genre", "difficulty", "source_type", "tags"])
+                df = pd.DataFrame(columns=["title", "chunks", "author", "summary", "type", "genre", "topic", "difficulty", "source_type", "tags"])
             
             # Add new row
             df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
@@ -408,53 +412,227 @@ with tab3:
         
         if uploaded_files:
             st.write(f"Selected {len(uploaded_files)} file(s):")
-            for file in uploaded_files:
+            for i, file in enumerate(uploaded_files):
                 st.write(f"- {file.name} ({file.size} bytes)")
-            
-            # Metadata form for PDF uploads
-            with st.form("pdf_metadata_form"):
-                st.subheader("Document Metadata")
-                col1, col2 = st.columns(2)
                 
-                with col1:
-                    author = st.text_input("Author", placeholder="Enter author name")
-                    doc_type = st.selectbox("Type", ["Book", "Article", "Report", "Paper", "Manual", "Other"])
-                    genre = st.selectbox("Genre", ["Fiction", "Non-fiction", "Technical", "Academic", "Business", "Educational", "Other"])
+                # Create a unique key for each file
+                file_key = f"file_{i}_{file.name.replace('.', '_')}"
                 
-                with col2:
-                    difficulty = st.selectbox("Difficulty", ["Beginner", "Intermediate", "Advanced", "Expert"])
-                    tags = st.text_input("Tags", placeholder="comma, separated, tags")
+                # Generate metadata button for each file
+                if st.button(f"🤖 Generate Metadata for {file.name}", key=f"generate_{file_key}"):
+                    with st.spinner(f"Analyzing {file.name} with GPT-4o-mini..."):
+                        try:
+                            # Extract text from PDF for analysis
+                            from pypdf import PdfReader
+                            import io
+                            
+                            # Read PDF content
+                            pdf_reader = PdfReader(io.BytesIO(file.read()))
+                            text_content = ""
+                            
+                            # Extract text from first few pages for analysis
+                            max_pages = min(3, len(pdf_reader.pages))
+                            for page_num in range(max_pages):
+                                text_content += pdf_reader.pages[page_num].extract_text()
+                            
+                            # Limit text for API call (first 2000 characters)
+                            analysis_text = text_content[:2000] if text_content else file.name
+                            
+                            # Generate metadata using GPT-4o-mini
+                            metadata_prompt = f"""
+                            Analyze this document and generate metadata. Document title: "{file.name.replace('.pdf', '')}"
+                            
+                            Document content preview:
+                            {analysis_text}
+                            
+                            Please provide metadata in this exact JSON format:
+                            {{
+                                "title": "Clean, readable title",
+                                "author": "Author name or 'Unknown'",
+                                "summary": "2-3 sentence summary",
+                                "type": "Book|Article|Report|Paper|Manual|Guide|Other",
+                                "genre": "Fiction|Non-fiction|Technical|Academic|Business|Educational|Legal|Medical|Other",
+                                "topic": "Main subject/topic area",
+                                "tags": "comma, separated, relevant, tags",
+                                "difficulty": "Beginner|Intermediate|Advanced|Expert"
+                            }}
+                            
+                            Base your analysis on the content, filename, and document structure. Be concise and accurate.
+                            """
+                            
+                            # Call GPT-4o-mini
+                            response = llm.invoke(metadata_prompt)
+                            
+                            # Parse JSON response
+                            import json
+                            try:
+                                # Extract JSON from response
+                                response_text = response.content if hasattr(response, 'content') else str(response)
+                                
+                                # Find JSON in response
+                                start_idx = response_text.find('{')
+                                end_idx = response_text.rfind('}') + 1
+                                
+                                if start_idx != -1 and end_idx != -1:
+                                    json_str = response_text[start_idx:end_idx]
+                                    generated_metadata = json.loads(json_str)
+                                else:
+                                    raise ValueError("No JSON found in response")
+                                
+                                # Store in session state for this file
+                                st.session_state[f"metadata_{file_key}"] = generated_metadata
+                                st.success(f"✅ Metadata generated for {file.name}")
+                                
+                            except Exception as parse_error:
+                                st.error(f"Error parsing metadata: {parse_error}")
+                                # Fallback metadata
+                                st.session_state[f"metadata_{file_key}"] = {
+                                    "title": file.name.replace('.pdf', ''),
+                                    "author": "Unknown",
+                                    "summary": "Document summary not available",
+                                    "type": "Document",
+                                    "genre": "Other",
+                                    "topic": "General",
+                                    "tags": "document, pdf",
+                                    "difficulty": "Intermediate"
+                                }
+                                st.warning("Using fallback metadata. Please review and edit as needed.")
+                                
+                        except Exception as e:
+                            st.error(f"Error analyzing document: {e}")
+                            continue
                 
-                submitted = st.form_submit_button("Process PDF Files", type="primary")
-                
-                if submitted:
-                    for file in uploaded_files:
-                        # Extract title from filename (remove .pdf extension)
-                        title = file.name.replace('.pdf', '')
-                        
-                        # TODO: Implement actual PDF processing here
-                        # For now, simulate chunk count
-                        estimated_chunks = file.size // 1000  # Rough estimate
-                        
-                        # Add to CSV
-                        success = add_document_to_csv(
-                            title=title,
-                            chunks=estimated_chunks,
-                            author=author,
-                            doc_type=doc_type,
-                            genre=genre,
-                            difficulty=difficulty,
-                            source_type="PDF",
-                            tags=tags
-                        )
-                        
-                        if success:
-                            st.success(f"✅ Added {title} to document registry")
-                        else:
-                            st.error(f"❌ Failed to add {title}")
+                # Show metadata form if generated
+                if f"metadata_{file_key}" in st.session_state:
+                    metadata = st.session_state[f"metadata_{file_key}"]
                     
-                    st.info("📝 PDF processing functionality will be implemented to actually process and embed the documents")
+                    with st.expander(f"📝 Review & Edit Metadata for {file.name}", expanded=True):
+                        with st.form(f"metadata_form_{file_key}"):
+                            st.subheader("Generated Metadata - Please Review & Edit")
+                            
+                            col1, col2 = st.columns(2)
+                            
+                            with col1:
+                                title = st.text_input("Title", value=metadata.get("title", ""), key=f"title_{file_key}")
+                                author = st.text_input("Author", value=metadata.get("author", ""), key=f"author_{file_key}")
+                                doc_type = st.selectbox("Type", 
+                                    ["Book", "Article", "Report", "Paper", "Manual", "Guide", "Other"],
+                                    index=["Book", "Article", "Report", "Paper", "Manual", "Guide", "Other"].index(metadata.get("type", "Other")) if metadata.get("type") in ["Book", "Article", "Report", "Paper", "Manual", "Guide", "Other"] else 6,
+                                    key=f"type_{file_key}")
+                                genre = st.selectbox("Genre", 
+                                    ["Fiction", "Non-fiction", "Technical", "Academic", "Business", "Educational", "Legal", "Medical", "Other"],
+                                    index=["Fiction", "Non-fiction", "Technical", "Academic", "Business", "Educational", "Legal", "Medical", "Other"].index(metadata.get("genre", "Other")) if metadata.get("genre") in ["Fiction", "Non-fiction", "Technical", "Academic", "Business", "Educational", "Legal", "Medical", "Other"] else 8,
+                                    key=f"genre_{file_key}")
+                            
+                            with col2:
+                                topic = st.text_input("Topic", value=metadata.get("topic", ""), key=f"topic_{file_key}")
+                                difficulty = st.selectbox("Difficulty", 
+                                    ["Beginner", "Intermediate", "Advanced", "Expert"],
+                                    index=["Beginner", "Intermediate", "Advanced", "Expert"].index(metadata.get("difficulty", "Intermediate")) if metadata.get("difficulty") in ["Beginner", "Intermediate", "Advanced", "Expert"] else 1,
+                                    key=f"difficulty_{file_key}")
+                                tags = st.text_input("Tags", value=metadata.get("tags", ""), key=f"tags_{file_key}")
+                            
+                            summary = st.text_area("Summary", value=metadata.get("summary", ""), height=100, key=f"summary_{file_key}")
+                            
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                if st.form_submit_button("✅ Process & Upload Document", type="primary"):
+                                    # Process the document
+                                    success = process_pdf_document(
+                                        file, title, author, summary, doc_type, genre, topic, tags, difficulty
+                                    )
+                                    if success:
+                                        st.success(f"🎉 Successfully processed {title}!")
+                                        # Clear the metadata from session state
+                                        del st.session_state[f"metadata_{file_key}"]
+                                        st.rerun()
+                            
+                            with col2:
+                                if st.form_submit_button("🗑️ Cancel", type="secondary"):
+                                    # Clear the metadata from session state
+                                    del st.session_state[f"metadata_{file_key}"]
+                                    st.rerun()
     
+    def process_pdf_document(file, title, author, summary, doc_type, genre, topic, tags, difficulty):
+        """Process PDF document: extract text, chunk, embed, and save to both CSV and Supabase."""
+        try:
+            # Reset file pointer
+            file.seek(0)
+            
+            # Extract text from PDF
+            from pypdf import PdfReader
+            import io
+            from langchain.text_splitter import RecursiveCharacterTextSplitter
+            from langchain_core.documents import Document
+            
+            pdf_reader = PdfReader(io.BytesIO(file.read()))
+            full_text = ""
+            
+            # Extract all text
+            for page_num, page in enumerate(pdf_reader.pages):
+                page_text = page.extract_text()
+                full_text += f"\n\n--- Page {page_num + 1} ---\n\n{page_text}"
+            
+            if not full_text.strip():
+                st.error("Could not extract text from PDF")
+                return False
+            
+            # Create document metadata
+            metadata = {
+                "title": title,
+                "author": author,
+                "summary": summary,
+                "type": doc_type,
+                "genre": genre,
+                "topic": topic,
+                "tags": tags,
+                "difficulty": difficulty,
+                "source_type": "PDF",
+                "source": f"PDF: {file.name}"
+            }
+            
+            # Split text into chunks
+            text_splitter = RecursiveCharacterTextSplitter(
+                chunk_size=1000,
+                chunk_overlap=100,
+                length_function=len,
+            )
+            
+            # Create document object
+            doc = Document(page_content=full_text, metadata=metadata)
+            
+            # Split into chunks
+            chunks = text_splitter.split_documents([doc])
+            
+            # Add to vector store (Supabase)
+            with st.spinner(f"Embedding {len(chunks)} chunks..."):
+                vector_store.add_documents(chunks)
+            
+            # Add to CSV
+            success = add_document_to_csv(
+                title=title,
+                chunks=len(chunks),
+                author=author,
+                doc_type=doc_type,
+                genre=genre,
+                difficulty=difficulty,
+                source_type="PDF",
+                tags=tags,
+                summary=summary,
+                topic=topic
+            )
+            
+            if success:
+                st.success(f"✅ Added {len(chunks)} chunks to vector store and updated CSV")
+                return True
+            else:
+                st.error("Failed to update CSV")
+                return False
+                
+        except Exception as e:
+            st.error(f"Error processing document: {e}")
+            return False
+
     with upload_tab2:
         st.subheader("Add YouTube Videos")
         youtube_url = st.text_input(
@@ -464,120 +642,439 @@ with tab3:
         )
         
         if youtube_url:
-            # Metadata form for YouTube videos
-            with st.form("youtube_metadata_form"):
-                st.subheader("Video Metadata")
-                col1, col2 = st.columns(2)
+            # Extract video ID
+            video_id = extract_video_id(youtube_url)
+            
+            if not video_id:
+                st.error("Invalid YouTube URL. Please enter a valid YouTube URL.")
+            else:
+                st.success(f"✅ Valid YouTube URL detected. Video ID: {video_id}")
                 
-                with col1:
-                    title = st.text_input("Title", placeholder="Video title (auto-detected if empty)")
-                    author = st.text_input("Channel/Author", placeholder="Channel name")
-                    genre = st.selectbox("Genre", ["Educational", "Tutorial", "Documentary", "Interview", "Lecture", "Other"])
+                # Generate metadata button
+                if st.button(f"🤖 Generate Metadata for YouTube Video", key="generate_youtube"):
+                    with st.spinner("Fetching video metadata and transcript..."):
+                        try:
+                            # Get video metadata
+                            video_metadata = get_youtube_metadata(video_id)
+                            
+                            # Get transcript from Supadata API
+                            transcript = get_youtube_transcript(video_id)
+                            
+                            if not transcript:
+                                st.error("Could not retrieve transcript for this video. It may not have captions available.")
+                            else:
+                                # Clean transcript using GPT-4o-mini
+                                cleaned_transcript = clean_youtube_transcript(transcript)
+                                
+                                # Generate enhanced metadata using GPT-4o-mini
+                                enhanced_metadata = generate_youtube_metadata(
+                                    video_metadata.get("title", "Unknown"), 
+                                    cleaned_transcript, 
+                                    video_metadata
+                                )
+                                
+                                # Store in session state
+                                st.session_state["youtube_metadata"] = enhanced_metadata
+                                st.session_state["youtube_transcript"] = cleaned_transcript
+                                st.session_state["youtube_video_id"] = video_id
+                                
+                                st.success("✅ Metadata and transcript generated successfully!")
+                                
+                        except Exception as e:
+                            st.error(f"Error processing YouTube video: {e}")
                 
-                with col2:
-                    difficulty = st.selectbox("Difficulty", ["Beginner", "Intermediate", "Advanced", "Expert"])
-                    tags = st.text_input("Tags", placeholder="comma, separated, tags")
+                # Show metadata form if generated
+                if "youtube_metadata" in st.session_state:
+                    metadata = st.session_state["youtube_metadata"]
+                    
+                    with st.expander("📝 Review & Edit YouTube Video Metadata", expanded=True):
+                        with st.form("youtube_metadata_form"):
+                            st.subheader("Generated Metadata - Please Review & Edit")
+                            
+                            col1, col2 = st.columns(2)
+                            
+                            with col1:
+                                title = st.text_input("Title", value=metadata.get("title", ""), key="youtube_title")
+                                author = st.text_input("Author/Speaker", value=metadata.get("author", ""), key="youtube_author")
+                                youtube_channel = st.text_input("YouTube Channel", value=metadata.get("youtube_channel", ""), key="youtube_channel", disabled=True)
+                                genre = st.selectbox("Genre", 
+                                    ["Educational", "Tutorial", "Documentary", "Interview", "Lecture", "Entertainment", "News", "Other"],
+                                    index=["Educational", "Tutorial", "Documentary", "Interview", "Lecture", "Entertainment", "News", "Other"].index(metadata.get("genre", "Educational")) if metadata.get("genre") in ["Educational", "Tutorial", "Documentary", "Interview", "Lecture", "Entertainment", "News", "Other"] else 0,
+                                    key="youtube_genre")
+                            
+                            with col2:
+                                topic = st.text_input("Topic", value=metadata.get("topic", ""), key="youtube_topic")
+                                difficulty = st.selectbox("Difficulty", 
+                                    ["Beginner", "Intermediate", "Advanced", "Expert"],
+                                    index=["Beginner", "Intermediate", "Advanced", "Expert"].index(metadata.get("difficulty", "Intermediate")) if metadata.get("difficulty") in ["Beginner", "Intermediate", "Advanced", "Expert"] else 1,
+                                    key="youtube_difficulty")
+                                tags = st.text_input("Tags", value=metadata.get("tags", ""), key="youtube_tags")
+                            
+                            summary = st.text_area("Summary", value=metadata.get("summary", ""), height=100, key="youtube_summary")
+                            
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                if st.form_submit_button("✅ Process & Upload Video", type="primary"):
+                                    # Process the YouTube video
+                                    success = process_youtube_video(
+                                        st.session_state["youtube_video_id"],
+                                        st.session_state["youtube_transcript"],
+                                        title, author, summary, genre, topic, tags, difficulty,
+                                        st.session_state["youtube_metadata"]
+                                    )
+                                    if success:
+                                        st.success(f"🎉 Successfully processed {title}!")
+                                        # Clear the metadata from session state
+                                        for key in ["youtube_metadata", "youtube_transcript", "youtube_video_id"]:
+                                            if key in st.session_state:
+                                                del st.session_state[key]
+                                        st.rerun()
+                            
+                            with col2:
+                                if st.form_submit_button("🗑️ Cancel", type="secondary"):
+                                    # Clear the metadata from session state
+                                    for key in ["youtube_metadata", "youtube_transcript", "youtube_video_id"]:
+                                        if key in st.session_state:
+                                            del st.session_state[key]
+                                    st.rerun()
+
+    # YouTube processing functions
+    def extract_video_id(url):
+        """Extract the video ID from a YouTube URL."""
+        import re
+        patterns = [
+            r'(?:v=|\/)([0-9A-Za-z_-]{11}).*',  # Standard YouTube URLs
+            r'(?:embed\/)([0-9A-Za-z_-]{11})',  # Embedded URLs
+            r'(?:youtu\.be\/)([0-9A-Za-z_-]{11})'  # Shortened youtu.be URLs
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, url)
+            if match:
+                return match.group(1)
+        return None
+
+    def get_youtube_metadata(video_id):
+        """Get video metadata from YouTube."""
+        try:
+            import requests
+            import re
+            
+            metadata = {
+                "video_id": video_id,
+                "source_url": f"https://www.youtube.com/watch?v={video_id}",
+                "source_type": "youtube_video"
+            }
+            
+            # Fetch the video page to extract title and channel info
+            url = f"https://www.youtube.com/watch?v={video_id}"
+            response = requests.get(url)
+            
+            if response.status_code == 200:
+                html_content = response.text
                 
-                submitted = st.form_submit_button("Process YouTube Video", type="primary")
-                
-                if submitted:
-                    # TODO: Implement actual YouTube processing here
-                    # For now, simulate the process
-                    if not title:
-                        title = f"YouTube Video - {youtube_url.split('=')[-1][:8]}"
-                    
-                    estimated_chunks = 25  # Rough estimate for video transcript
-                    
-                    # Add to CSV
-                    success = add_document_to_csv(
-                        title=title,
-                        chunks=estimated_chunks,
-                        author=author,
-                        doc_type="Video",
-                        genre=genre,
-                        difficulty=difficulty,
-                        source_type="YouTube",
-                        tags=tags
-                    )
-                    
-                    if success:
-                        st.success(f"✅ Added {title} to document registry")
-                    else:
-                        st.error(f"❌ Failed to add {title}")
-                    
-                    st.info("📝 YouTube processing functionality will be implemented to actually extract and embed the transcript")
-    
-    # CSV Management Section
-    st.divider()
-    st.subheader("📊 CSV Management")
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        if st.button("📄 View CSV File"):
-            try:
-                import pandas as pd
-                if os.path.exists("documents_metadata.csv"):
-                    df = pd.read_csv("documents_metadata.csv")
-                    st.dataframe(df, use_container_width=True)
+                # Extract title
+                title_match = re.search(r'<meta name="title" content="([^"]+)"', html_content)
+                if title_match:
+                    metadata["title"] = title_match.group(1)
                 else:
-                    st.warning("CSV file not found")
-            except Exception as e:
-                st.error(f"Error reading CSV: {e}")
-    
-    with col2:
-        if st.button("🔄 Sync from Supabase"):
-            try:
-                with st.spinner("Syncing from Supabase..."):
-                    result = supabase.table("documents").select("id, metadata").limit(50000).execute()
-                    documents = result.data
+                    metadata["title"] = f"YouTube Video {video_id}"
                     
-                    if documents:
-                        # Process and save to CSV
-                        title_counts = {}
-                        metadata_by_title = {}
-                        
-                        for doc in documents:
-                            metadata = doc.get("metadata", {})
-                            title = metadata.get("title", "Unknown")
-                            
-                            if title not in title_counts:
-                                title_counts[title] = 0
-                                metadata_by_title[title] = metadata
-                            
-                            title_counts[title] += 1
-                        
-                        # Create DataFrame
-                        data = []
-                        for title, count in title_counts.items():
-                            metadata = metadata_by_title[title]
-                            data.append({
-                                "title": title,
-                                "chunks": count,
-                                "author": metadata.get("author", "Unknown"),
-                                "type": metadata.get("type", "Unknown"),
-                                "genre": metadata.get("genre", "Unknown"),
-                                "difficulty": metadata.get("difficulty", "Unknown"),
-                                "source_type": metadata.get("source_type", "Unknown"),
-                                "tags": metadata.get("tags", "Unknown")
-                            })
-                        
-                        df = pd.DataFrame(data)
-                        df.to_csv("documents_metadata.csv", index=False)
-                        st.success(f"✅ Synced {len(df)} documents to CSV")
+                # Extract channel name
+                channel_match = re.search(r'<link itemprop="name" content="([^"]+)"', html_content)
+                if channel_match:
+                    metadata["youtube_channel"] = channel_match.group(1)
+                else:
+                    channel_match2 = re.search(r'"author":"([^"]+)"', html_content)
+                    if channel_match2:
+                        metadata["youtube_channel"] = channel_match2.group(1)
                     else:
-                        st.warning("No documents found in Supabase")
-            except Exception as e:
-                st.error(f"Error syncing from Supabase: {e}")
-    
-    with col3:
-        uploaded_csv = st.file_uploader("📤 Upload CSV", type="csv", help="Upload a CSV file to replace the current document registry")
-        if uploaded_csv:
+                        metadata["youtube_channel"] = "Unknown Channel"
+            else:
+                metadata["title"] = f"YouTube Video {video_id}"
+                metadata["youtube_channel"] = "Unknown Channel"
+            
+            return metadata
+        except Exception as e:
+            st.error(f"Error fetching video metadata: {e}")
+            return {
+                "title": f"YouTube Video {video_id}",
+                "youtube_channel": "Unknown Channel",
+                "video_id": video_id,
+                "source_url": f"https://www.youtube.com/watch?v={video_id}",
+                "source_type": "youtube_video"
+            }
+
+    def get_youtube_transcript(video_id):
+        """Get transcript using Supadata API."""
+        try:
+            import requests
+            
+            # Supadata API configuration
+            SUPADATA_API_URL = "https://api.supadata.ai"
+            SUPADATA_TRANSCRIPT_ENDPOINT = "/v1/youtube/transcript"
+            SUPADATA_API_KEY = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiIsImtpZCI6IjEifQ.eyJpc3MiOiJuYWRsZXMiLCJpYXQiOiIxNzQ3OTIwNTIyIiwicHVycG9zZSI6ImFwaV9hdXRoZW50aWNhdGlvbiIsInN1YiI6IjEwMjk3YjAyYThlZjRhOTdhNmFjNjUwNjYxYWVlZjNiIn0.5OwI0aFR_BfgrDp2c55muHS9OyVX6XxHHPhULTzqdRY"
+            
+            api_url = f"{SUPADATA_API_URL}{SUPADATA_TRANSCRIPT_ENDPOINT}"
+            
+            params = {"videoId": video_id}
+            headers = {"X-API-Key": SUPADATA_API_KEY}
+            
+            response = requests.get(api_url, params=params, headers=headers)
+            
+            if response.status_code == 200:
+                data = response.json()
+                if "content" in data:
+                    transcript = " ".join([segment.get("text", "") for segment in data.get("content", [])])
+                    return transcript
+                else:
+                    return None
+            else:
+                st.error(f"Supadata API error: Status code {response.status_code}")
+                return None
+                
+        except Exception as e:
+            st.error(f"Error getting transcript: {e}")
+            return None
+
+    def clean_youtube_transcript(transcript):
+        """Clean and format transcript using GPT-4o-mini."""
+        try:
+            system_prompt = """You are an expert in grammar corrections and textual structuring.
+
+Correct the classification of the provided text, adding commas, periods, question marks and other symbols necessary for natural and consistent reading. Do not change any words, just adjust the punctuation according to the grammatical rules and context.
+
+Organize your content using markdown, structuring it with titles, subtitles, lists or other protected elements to clearly highlight the topics and information captured. Leave it in English and remember to always maintain the original formatting.
+
+Textual organization should always be a priority according to the content of the text, as well as the appropriate title, which must make sense."""
+            
+            # Limit transcript length
+            max_content_length = 12000
+            if len(transcript) > max_content_length:
+                transcript = transcript[:max_content_length] + "\n\n[Transcript truncated due to length]"
+            
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"Here is a YouTube transcript that needs cleaning and formatting:\n\n{transcript}"}
+            ]
+            
+            response = llm.invoke(messages)
+            return response.content
+            
+        except Exception as e:
+            st.error(f"Error cleaning transcript: {e}")
+            return transcript
+
+    def generate_youtube_metadata(title, transcript_sample, video_metadata):
+        """Generate enhanced metadata for YouTube video."""
+        try:
+            system_message = """You are a metadata expert who creates high-quality content summaries and tags for YouTube videos.
+Follow these instructions carefully:
+1. Create a concise summary using clear, concise language with active voice
+2. Identify the genre/topic and content type
+3. Identify the ACTUAL AUTHOR of the content (not the YouTube channel) from the title and content
+4. Assign a difficulty rating (Beginner, Intermediate, Advanced, Expert) based on complexity and target audience
+5. Generate relevant tags that would be useful in a chatbot context
+
+Format your response exactly as follows:
+Summary: [Your summary here]
+Genre: [Genre]
+Topic: [Topic]
+Type: [Content type - should be "Video"]
+Author: [The actual author/speaker of the content, not the YouTube channel]
+Tags: [tag1, tag2, tag3, etc.]
+Difficulty: [Beginner/Intermediate/Advanced/Expert]"""
+            
+            messages = [
+                {"role": "system", "content": system_message},
+                {"role": "user", "content": f"Generate metadata for YouTube video titled '{title}' with this transcript sample: {transcript_sample[:1500]}..."}
+            ]
+            
+            response = llm.invoke(messages)
+            response_text = response.content
+            
+            # Parse response
+            import re
+            metadata_dict = {}
             try:
-                import pandas as pd
-                df = pd.read_csv(uploaded_csv)
-                df.to_csv("documents_metadata.csv", index=False)
-                st.success(f"✅ Uploaded CSV with {len(df)} documents")
-            except Exception as e:
-                st.error(f"Error uploading CSV: {e}")
+                metadata_dict["summary"] = re.search(r"Summary: (.*?)(?:\n|$)", response_text, re.DOTALL).group(1).strip()
+                metadata_dict["genre"] = re.search(r"Genre: (.*?)(?:\n|$)", response_text).group(1).strip()
+                metadata_dict["topic"] = re.search(r"Topic: (.*?)(?:\n|$)", response_text).group(1).strip()
+                metadata_dict["type"] = re.search(r"Type: (.*?)(?:\n|$)", response_text).group(1).strip()
+                metadata_dict["author"] = re.search(r"Author: (.*?)(?:\n|$)", response_text).group(1).strip()
+                metadata_dict["tags"] = re.search(r"Tags: (.*?)(?:\n|$)", response_text).group(1).strip()
+                metadata_dict["difficulty"] = re.search(r"Difficulty: (.*?)(?:\n|$)", response_text).group(1).strip()
+                
+                # Add video metadata
+                for key, value in video_metadata.items():
+                    if key != "author":  # Don't overwrite author with channel name
+                        metadata_dict[key] = value
+                
+                metadata_dict["youtube_channel"] = video_metadata.get("youtube_channel", "Unknown Channel")
+                
+            except (AttributeError, Exception) as e:
+                st.error(f"Error parsing metadata: {e}")
+                # Fallback metadata
+                metadata_dict = {
+                    "summary": "Summary extraction failed",
+                    "genre": "Educational",
+                    "topic": "Unknown",
+                    "type": "Video",
+                    "author": "Unknown",
+                    "tags": "youtube, video",
+                    "difficulty": "Intermediate"
+                }
+                metadata_dict.update(video_metadata)
+            
+            return metadata_dict
+            
+        except Exception as e:
+            st.error(f"Error generating metadata: {e}")
+            return video_metadata
+
+    def process_youtube_video(video_id, transcript, title, author, summary, genre, topic, tags, difficulty, original_metadata):
+        """Process YouTube video: chunk, embed, and save to both CSV and Supabase."""
+        try:
+            from langchain.text_splitter import RecursiveCharacterTextSplitter
+            from langchain_core.documents import Document
+            
+            # Create document metadata
+            metadata = {
+                "title": title,
+                "author": author,
+                "summary": summary,
+                "type": "Video",
+                "genre": genre,
+                "topic": topic,
+                "tags": tags,
+                "difficulty": difficulty,
+                "source_type": "YouTube",
+                "video_id": video_id,
+                "youtube_channel": original_metadata.get("youtube_channel", "Unknown"),
+                "source_url": f"https://www.youtube.com/watch?v={video_id}",
+                "source": f"YouTube: {title}"
+            }
+            
+            # Split text into chunks (400/200 for YouTube videos)
+            text_splitter = RecursiveCharacterTextSplitter(
+                chunk_size=400,
+                chunk_overlap=200,
+                length_function=len,
+            )
+            
+            # Create document object
+            doc = Document(page_content=transcript, metadata=metadata)
+            
+            # Split into chunks
+            chunks = text_splitter.split_documents([doc])
+            
+            # Add chunk-specific metadata
+            for i, chunk in enumerate(chunks):
+                chunk.metadata.update({
+                    "chunk_id": i,
+                    "total_chunks": len(chunks)
+                })
+            
+            # Add to vector store (Supabase)
+            with st.spinner(f"Embedding {len(chunks)} chunks..."):
+                vector_store.add_documents(chunks)
+            
+            # Add to CSV
+            success = add_document_to_csv(
+                title=title,
+                chunks=len(chunks),
+                author=author,
+                doc_type="Video",
+                genre=genre,
+                difficulty=difficulty,
+                source_type="YouTube",
+                tags=tags,
+                summary=summary,
+                topic=topic
+            )
+            
+            if success:
+                st.success(f"✅ Added {len(chunks)} chunks to vector store and updated CSV")
+                return True
+            else:
+                st.error("Failed to update CSV")
+                return False
+                
+        except Exception as e:
+            st.error(f"Error processing YouTube video: {e}")
+            return False
+
+# CSV Management Section
+st.divider()
+st.subheader("📊 CSV Management")
+
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    if st.button("📄 View CSV File"):
+        try:
+            import pandas as pd
+            if os.path.exists("documents_metadata.csv"):
+                df = pd.read_csv("documents_metadata.csv")
+                st.dataframe(df, use_container_width=True)
+            else:
+                st.warning("CSV file not found")
+        except Exception as e:
+            st.error(f"Error reading CSV: {e}")
+
+with col2:
+    if st.button("🔄 Sync from Supabase"):
+        try:
+            with st.spinner("Syncing from Supabase..."):
+                result = supabase.table("documents").select("id, metadata").limit(50000).execute()
+                documents = result.data
+                
+                if documents:
+                    # Process and save to CSV
+                    title_counts = {}
+                    metadata_by_title = {}
+                    
+                    for doc in documents:
+                        metadata = doc.get("metadata", {})
+                        title = metadata.get("title", "Unknown")
+                        
+                        if title not in title_counts:
+                            title_counts[title] = 0
+                            metadata_by_title[title] = metadata
+                        
+                        title_counts[title] += 1
+                    
+                    # Create DataFrame
+                    data = []
+                    for title, count in title_counts.items():
+                        metadata = metadata_by_title[title]
+                        data.append({
+                            "title": title,
+                            "chunks": count,
+                            "author": metadata.get("author", "Unknown"),
+                            "type": metadata.get("type", "Unknown"),
+                            "genre": metadata.get("genre", "Unknown"),
+                            "difficulty": metadata.get("difficulty", "Unknown"),
+                            "source_type": metadata.get("source_type", "Unknown"),
+                            "tags": metadata.get("tags", "Unknown")
+                        })
+                    
+                    df = pd.DataFrame(data)
+                    df.to_csv("documents_metadata.csv", index=False)
+                    st.success(f"✅ Synced {len(df)} documents to CSV")
+                else:
+                    st.warning("No documents found in Supabase")
+        except Exception as e:
+            st.error(f"Error syncing from Supabase: {e}")
+
+with col3:
+    uploaded_csv = st.file_uploader("📤 Upload CSV", type="csv", help="Upload a CSV file to replace the current document registry")
+    if uploaded_csv:
+        try:
+            import pandas as pd
+            df = pd.read_csv(uploaded_csv)
+            df.to_csv("documents_metadata.csv", index=False)
+            st.success(f"✅ Uploaded CSV with {len(df)} documents")
+        except Exception as e:
+            st.error(f"Error uploading CSV: {e}")
 

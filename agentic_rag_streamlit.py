@@ -204,7 +204,7 @@ with tab2:
     try:
         # Get all documents from Supabase
         with st.spinner("Loading vector store data..."):
-            result = supabase.table("documents").select("id, metadata").execute()
+            result = supabase.table("documents").select("id, metadata").limit(10000).execute()
             documents = result.data
         
         if not documents:

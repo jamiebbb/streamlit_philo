@@ -131,11 +131,11 @@ with tab1:
     if "messages" not in st.session_state:
         st.session_state.messages = []
 
-    # Display chat messages from history on app rerun
-    # Create a container for messages that will scroll
-    message_container = st.container()
+    # Create a scrollable container for chat messages
+    chat_container = st.container()
     
-    with message_container:
+    # Display all chat messages in the container
+    with chat_container:
         for i, message in enumerate(st.session_state.messages):
             if isinstance(message, HumanMessage):
                 with st.chat_message("user"):
@@ -144,79 +144,76 @@ with tab1:
                 with st.chat_message("assistant"):
                     st.markdown(message.content)
                     
-                    # Add feedback buttons for all except the most recent message
-                    # This prevents adding feedback buttons to a message the user just received
-                    if i < len(st.session_state.messages) - 1 and i % 2 == 1:  # Only add to AI messages
-                        # Get the corresponding user query (comes before the AI message)
-                        user_query = st.session_state.messages[i-1].content if i > 0 else ""
-                        feedback_handler.add_feedback_buttons(user_query, message.content)
+                    # Add feedback buttons for ALL AI messages (not just old ones)
+                    # Get the corresponding user query (comes before the AI message)
+                    user_query = st.session_state.messages[i-1].content if i > 0 else ""
+                    
+                    # Create a unique key for this message's feedback
+                    message_key = f"msg_{i}_{hash(message.content)}"
+                    
+                    # Add feedback buttons
+                    col1, col2, col3 = st.columns([1, 1, 1])
+                    with col1:
+                        if st.button("👍 Helpful", key=f"helpful_{message_key}"):
+                            feedback_handler.store_feedback(user_query, message.content, "helpful")
+                            st.success("Thanks for your feedback!")
+                    with col2:
+                        if st.button("👎 Not Helpful", key=f"not_helpful_{message_key}"):
+                            feedback_handler.store_feedback(user_query, message.content, "not_helpful")
+                            st.error("We'll try to do better next time!")
+                    with col3:
+                        if st.button("🤔 Partially Helpful", key=f"partial_{message_key}"):
+                            feedback_handler.store_feedback(user_query, message.content, "partial")
+                            st.info("Thanks for your feedback!")
+                    
+                    # Detailed feedback form
+                    with st.expander("💬 Provide detailed feedback", expanded=False, key=f"feedback_expander_{message_key}"):
+                        col1, col2 = st.columns([1, 3])
+                        with col1:
+                            rating = st.slider("Rating", 1, 5, 3, help="Rate the response quality", key=f"rating_{message_key}")
+                        with col2:
+                            comment = st.text_area("Comments", placeholder="Any corrections or suggestions?", height=80, key=f"comment_{message_key}")
+                        
+                        if st.button("Submit Feedback", type="secondary", key=f"submit_{message_key}"):
+                            feedback_handler.store_detailed_feedback(user_query, message.content, rating, comment)
+                            st.success("Thank you for your feedback!")
 
-    # Keep the input at the bottom - this should always be at the bottom of the tab
+    # Chat input - this will always stay at the bottom
     user_question = st.chat_input("Ask me about the documents in your library...")
 
-    # did the user submit a prompt?
+    # Process new user input
     if user_question:
-
-        # add the message from the user (prompt) to the screen with streamlit
-        with st.chat_message("user"):
-            st.markdown(user_question)
-
+        # Add user message to session state first
         st.session_state.messages.append(HumanMessage(user_question))
 
         # Look for relevant feedback that might contain corrections
         try:
-            # Try new method with embeddings model
             relevant_feedback = feedback_handler.get_relevant_feedback(user_question, embeddings_model=embeddings)
         except TypeError:
-            # Fall back to old method without embeddings model (for backward compatibility)
             relevant_feedback = feedback_handler.get_relevant_feedback(user_question)
         
-        # invoking the agent
+        # Get AI response
         with st.spinner("Thinking..."):
-            # Prepare input with feedback if available
             input_data = {"input": user_question, "chat_history": st.session_state.messages}
             
-            # If we have relevant feedback, include it in the input
             if relevant_feedback:
-                # Add relevant feedback context to the input
                 feedback_context = "\n\nIMPORTANT: Users have provided the following corrections to past similar questions:\n"
-                for i, feedback in enumerate(relevant_feedback[:3]):  # Limit to top 3 most relevant
+                for i, feedback in enumerate(relevant_feedback[:3]):
                     feedback_context += f"\n{i+1}. Past query: '{feedback['past_query']}'\n"
                     feedback_context += f"   User correction: '{feedback['comment']}'\n"
                 
-                # Combine the user question with feedback context
                 enhanced_question = f"{user_question}\n\n{feedback_context}\n\nPlease take these corrections into account in your response."
                 input_data["input"] = enhanced_question
                 
-                # Add a small note to the UI that feedback is being used
                 st.info("📝 Incorporating past feedback into this response", icon="ℹ️")
             
             result = agent_executor.invoke(input_data)
 
+        # Add AI response to session state
         ai_message = result["output"]
-
-        # adding the response from the llm to the screen (and chat)
-        with st.chat_message("assistant"):
-            st.markdown(ai_message)
-            
-            # Add simple feedback buttons for the new message
-            feedback_handler.add_feedback_buttons(user_question, ai_message)
-            
-            # Simple correction interface (less prominent)
-            with st.expander("💬 Provide feedback or correction", expanded=False):
-                col1, col2 = st.columns([1, 3])
-                with col1:
-                    rating = st.slider("Rating", 1, 5, 3, help="Rate the response quality")
-                with col2:
-                    comment = st.text_area("Comments", placeholder="Any corrections or suggestions?", height=80)
-                
-                if st.button("Submit Feedback", type="secondary"):
-                    feedback_handler.store_detailed_feedback(user_question, ai_message, rating, comment)
-                    st.success("Thank you for your feedback!")
-
         st.session_state.messages.append(AIMessage(ai_message))
         
-        # Force a rerun to update the display
+        # Rerun to show the new messages
         st.rerun()
 
     # Add a footer
@@ -235,7 +232,7 @@ with tab2:
     try:
         # Get all documents from Supabase
         with st.spinner("Loading vector store data..."):
-            result = supabase.table("documents").select("id, metadata").limit(10000).execute()
+            result = supabase.table("documents").select("id, metadata").limit(50000).execute()
             documents = result.data
         
         if not documents:

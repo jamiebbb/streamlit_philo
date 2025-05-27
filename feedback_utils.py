@@ -2,6 +2,7 @@ import os
 from datetime import datetime
 import streamlit as st
 import uuid
+import time
 
 try:
     import numpy as np
@@ -45,23 +46,26 @@ class FeedbackHandler:
             if "chat_id" not in st.session_state:
                 st.session_state.chat_id = str(uuid.uuid4())
             chat_id = st.session_state.chat_id
+        
+        # Create a unique key based on response content and timestamp
+        unique_key = f"{hash(ai_response)}_{int(time.time() * 1000)}"
             
         # Create columns for buttons
         col1, col2, col3 = st.columns([1, 1, 1])
         
         # Add feedback buttons
         with col1:
-            if st.button("👍 Helpful", key=f"helpful_{hash(ai_response)}"):
+            if st.button("👍 Helpful", key=f"helpful_{unique_key}"):
                 self.store_feedback(user_query, ai_response, "helpful", chat_id)
                 st.success("Thanks for your feedback!")
                 
         with col2:
-            if st.button("👎 Not Helpful", key=f"not_helpful_{hash(ai_response)}"):
+            if st.button("👎 Not Helpful", key=f"not_helpful_{unique_key}"):
                 self.store_feedback(user_query, ai_response, "not_helpful", chat_id)
                 st.error("We'll try to do better next time!")
                 
         with col3:
-            if st.button("🤔 Partially Helpful", key=f"partial_{hash(ai_response)}"):
+            if st.button("🤔 Partially Helpful", key=f"partial_{unique_key}"):
                 self.store_feedback(user_query, ai_response, "partial", chat_id)
                 st.info("Thanks for your feedback!")
     

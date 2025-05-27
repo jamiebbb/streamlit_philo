@@ -87,26 +87,17 @@ if "chat_id" not in st.session_state:
 
 # TAB 1: CHAT
 with tab1:
-    # Sidebar with stats
+    # Sidebar with basic info
     with st.sidebar:
-        st.header("Feedback Statistics")
-        
-        stats = feedback_handler.get_feedback_stats()
-        if stats:
-            col1, col2 = st.columns(2)
-            with col1:
-                st.metric("Helpful Responses", stats["helpful"])
-                st.metric("Partially Helpful", stats["partial"])
-            with col2:
-                st.metric("Not Helpful", stats["not_helpful"])
-                st.metric("Detailed Feedback", stats["detailed"])
-        else:
-            st.info("No feedback data available yet.")
+        st.markdown("### About")
+        st.markdown("This is an Agentic RAG chatbot that searches through your document library.")
+        st.markdown("Ask questions about the content in your knowledge base!")
         
         st.divider()
-        st.markdown("### About")
-        st.markdown("This is an Agentic RAG chatbot with feedback capabilities.")
-        st.markdown("Your feedback helps improve the model's responses!")
+        st.markdown("### Tips")
+        st.markdown("• Be specific in your questions")
+        st.markdown("• Provide feedback to improve responses")
+        st.markdown("• Check the Vector Store tab to see available documents")
 
     # initialize chat history
     if "messages" not in st.session_state:
@@ -130,7 +121,7 @@ with tab1:
 
 
     # create the bar where we can type messages
-    user_question = st.chat_input("How are you?")
+    user_question = st.chat_input("Ask me about the documents in your library...")
 
 
     # did the user submit a prompt?
@@ -179,23 +170,24 @@ with tab1:
             st.markdown(ai_message)
             st.session_state.messages.append(AIMessage(ai_message))
             
-            # Add feedback buttons and detailed feedback for the new response
+            # Add simple feedback buttons
             feedback_handler.add_feedback_buttons(user_question, ai_message)
             
-            # Make detailed feedback more prominent when corrections are needed
-            st.write("📝 **Notice something incorrect?** Expand below to provide a correction:")
-            with st.expander("Provide a correction or detailed feedback"):
-                st.write("Your feedback helps improve future answers. If the response contains incorrect information, please explain the correct information below.")
-                rating = st.slider("Rate this response (1-5)", 1, 5, 3)
-                comment = st.text_area("Correction or comment", placeholder="Explain what's incorrect and provide the right information...")
+            # Simple correction interface (less prominent)
+            with st.expander("💬 Provide feedback or correction", expanded=False):
+                col1, col2 = st.columns([1, 3])
+                with col1:
+                    rating = st.slider("Rating", 1, 5, 3, help="Rate the response quality")
+                with col2:
+                    comment = st.text_area("Comments", placeholder="Any corrections or suggestions?", height=80)
                 
-                if st.button("Submit Correction", type="primary"):
+                if st.button("Submit Feedback", type="secondary"):
                     feedback_handler.store_detailed_feedback(user_question, ai_message, rating, comment)
-                    st.success("Thank you for your correction! This will be used to improve future responses.")
+                    st.success("Thank you for your feedback!")
 
     # Add a footer
     st.markdown("---")
-    st.markdown("*Your feedback helps us improve! Please rate our responses and provide corrections when needed.*")
+    st.markdown("*💡 Tip: Your feedback helps improve future responses*")
 
 # TAB 2: VECTOR STORE VIEWER
 with tab2:

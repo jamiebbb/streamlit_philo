@@ -27,6 +27,7 @@ from feedback_utils import FeedbackHandler
 
 # load environment variables
 load_dotenv()  
+print("DEBUG - OpenAI API Key:", os.environ.get("OPENAI_API_KEY")[:10] + "..." if os.environ.get("OPENAI_API_KEY") else "NOT FOUND")
 
 # initiating supabase
 supabase_url = os.environ.get("SUPABASE_URL")
@@ -35,6 +36,10 @@ supabase: Client = create_client(supabase_url, supabase_key)
 
 # Initialize feedback handler
 feedback_handler = FeedbackHandler(supabase)
+
+# Test Supabase connection for feedback
+print("Testing feedback system...")
+feedback_handler.test_supabase_connection()
 
 # initiating embeddings model
 embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
@@ -98,31 +103,56 @@ with tab1:
         st.markdown("• Be specific in your questions")
         st.markdown("• Provide feedback to improve responses")
         st.markdown("• Check the Vector Store tab to see available documents")
+        
+        st.divider()
+        st.markdown("### Debug")
+        if st.button("🧪 Test Feedback System"):
+            success = feedback_handler.store_feedback(
+                "test query", 
+                "test response", 
+                "test_feedback", 
+                "test_chat_id"
+            )
+            if success:
+                st.success("✅ Feedback system working!")
+            else:
+                st.error("❌ Feedback system failed!")
+                
+        if st.button("📊 Check Feedback Count"):
+            try:
+                result = supabase.table("feedback").select("*").execute()
+                st.info(f"Found {len(result.data)} feedback records")
+                if result.data:
+                    st.json(result.data[-1])  # Show latest record
+            except Exception as e:
+                st.error(f"Error: {e}")
 
     # initialize chat history
     if "messages" not in st.session_state:
         st.session_state.messages = []
 
-    # display chat messages from history on app rerun
-    for i, message in enumerate(st.session_state.messages):
-        if isinstance(message, HumanMessage):
-            with st.chat_message("user"):
-                st.markdown(message.content)
-        elif isinstance(message, AIMessage):
-            with st.chat_message("assistant"):
-                st.markdown(message.content)
-                
-                # Add feedback buttons for all except the most recent message
-                # This prevents adding feedback buttons to a message the user just received
-                if i < len(st.session_state.messages) - 1 and i % 2 == 1:  # Only add to AI messages
-                    # Get the corresponding user query (comes before the AI message)
-                    user_query = st.session_state.messages[i-1].content if i > 0 else ""
-                    feedback_handler.add_feedback_buttons(user_query, message.content)
+    # Display chat messages from history on app rerun
+    # Create a container for messages that will scroll
+    message_container = st.container()
+    
+    with message_container:
+        for i, message in enumerate(st.session_state.messages):
+            if isinstance(message, HumanMessage):
+                with st.chat_message("user"):
+                    st.markdown(message.content)
+            elif isinstance(message, AIMessage):
+                with st.chat_message("assistant"):
+                    st.markdown(message.content)
+                    
+                    # Add feedback buttons for all except the most recent message
+                    # This prevents adding feedback buttons to a message the user just received
+                    if i < len(st.session_state.messages) - 1 and i % 2 == 1:  # Only add to AI messages
+                        # Get the corresponding user query (comes before the AI message)
+                        user_query = st.session_state.messages[i-1].content if i > 0 else ""
+                        feedback_handler.add_feedback_buttons(user_query, message.content)
 
-
-    # create the bar where we can type messages
+    # Keep the input at the bottom - this should always be at the bottom of the tab
     user_question = st.chat_input("Ask me about the documents in your library...")
-
 
     # did the user submit a prompt?
     if user_question:
@@ -131,7 +161,7 @@ with tab1:
         with st.chat_message("user"):
             st.markdown(user_question)
 
-            st.session_state.messages.append(HumanMessage(user_question))
+        st.session_state.messages.append(HumanMessage(user_question))
 
         # Look for relevant feedback that might contain corrections
         try:
@@ -168,9 +198,8 @@ with tab1:
         # adding the response from the llm to the screen (and chat)
         with st.chat_message("assistant"):
             st.markdown(ai_message)
-            st.session_state.messages.append(AIMessage(ai_message))
             
-            # Add simple feedback buttons
+            # Add simple feedback buttons for the new message
             feedback_handler.add_feedback_buttons(user_question, ai_message)
             
             # Simple correction interface (less prominent)
@@ -184,6 +213,11 @@ with tab1:
                 if st.button("Submit Feedback", type="secondary"):
                     feedback_handler.store_detailed_feedback(user_question, ai_message, rating, comment)
                     st.success("Thank you for your feedback!")
+
+        st.session_state.messages.append(AIMessage(ai_message))
+        
+        # Force a rerun to update the display
+        st.rerun()
 
     # Add a footer
     st.markdown("---")

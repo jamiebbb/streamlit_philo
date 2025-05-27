@@ -81,46 +81,67 @@ class FeedbackHandler:
     
     def store_feedback(self, query, response, feedback_type, chat_id=None):
         """Store basic feedback in Supabase."""
+        # Ensure we have a valid user_id
+        user_id = st.session_state.get("user_id", "anonymous")
+        if not user_id:
+            user_id = "anonymous"
+            
         feedback_data = {
             "query": query,
             "response": response,
             "feedback": feedback_type,
+            "user_id": user_id,
             "metadata": {
                 "timestamp": datetime.now().isoformat(),
-                "chat_id": chat_id or str(uuid.uuid4()),
-                "user_id": st.session_state.get("user_id", "anonymous")
+                "chat_id": chat_id or str(uuid.uuid4())
             }
         }
         
         try:
+            print(f"Attempting to store feedback: {feedback_type}")
+            print(f"Feedback data: {feedback_data}")
             result = self.supabase.table("feedback").insert(feedback_data).execute()
-            print(f"Feedback stored: {feedback_type}")
+            print(f"Feedback stored successfully: {feedback_type}")
+            print(f"Result: {result}")
+            st.success(f"Feedback '{feedback_type}' saved successfully!")
             return True
         except Exception as e:
             print(f"Error storing feedback: {e}")
+            st.error(f"Failed to save feedback: {str(e)}")
             return False
     
     def store_detailed_feedback(self, query, response, rating, comment, chat_id=None):
         """Store detailed feedback in Supabase."""
+        # Ensure we have a valid user_id
+        user_id = st.session_state.get("user_id", "anonymous")
+        if not user_id:
+            user_id = "anonymous"
+            
         feedback_data = {
             "query": query,
             "response": response,
             "feedback": "detailed",
+            "user_id": user_id,
             "metadata": {
                 "rating": rating,
                 "comment": comment,
                 "timestamp": datetime.now().isoformat(),
-                "chat_id": chat_id or str(uuid.uuid4()),
-                "user_id": st.session_state.get("user_id", "anonymous")
+                "chat_id": chat_id or str(uuid.uuid4())
             }
         }
         
         try:
+            print(f"Attempting to store detailed feedback...")
+            print(f"Rating: {rating}, Comment: {comment}")
+            print(f"Feedback data: {feedback_data}")
             result = self.supabase.table("feedback").insert(feedback_data).execute()
-            print(f"Detailed feedback stored: rating={rating}")
+            print(f"Detailed feedback stored successfully!")
+            print(f"Result: {result}")
+            st.success(f"Detailed feedback saved successfully! Rating: {rating}")
             return True
         except Exception as e:
             print(f"Error storing detailed feedback: {e}")
+            st.error(f"Failed to save detailed feedback: {str(e)}")
             return False
     
     def get_feedback_stats(self):
@@ -275,4 +296,39 @@ class FeedbackHandler:
             
         except Exception as e:
             print(f"Error calculating cosine similarity: {e}")
-            return 0.0 
+            return 0.0
+    
+    def test_supabase_connection(self):
+        """Test Supabase connection and permissions for feedback table."""
+        try:
+            # Test read permission
+            print("Testing Supabase connection...")
+            result = self.supabase.table("feedback").select("*").limit(1).execute()
+            print(f"✅ Read test successful. Found {len(result.data)} records.")
+            
+            # Test write permission with a test record
+            test_data = {
+                "query": "test_query",
+                "response": "test_response", 
+                "feedback": "test",
+                "metadata": {
+                    "test": True,
+                    "timestamp": datetime.now().isoformat()
+                }
+            }
+            
+            insert_result = self.supabase.table("feedback").insert(test_data).execute()
+            print(f"✅ Write test successful. Inserted record: {insert_result.data}")
+            
+            # Clean up test record
+            if insert_result.data and len(insert_result.data) > 0:
+                test_id = insert_result.data[0].get('id')
+                if test_id:
+                    delete_result = self.supabase.table("feedback").delete().eq('id', test_id).execute()
+                    print(f"✅ Cleanup successful. Deleted test record.")
+            
+            return True
+            
+        except Exception as e:
+            print(f"❌ Supabase connection test failed: {e}")
+            return False 

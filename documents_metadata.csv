@@ -1,0 +1,4 @@
+title,chunks,author,type,genre,difficulty,source_type,tags
+"Sample Document 1",45,"John Doe","Book","Fiction","Intermediate","PDF","literature, novel, fiction"
+"Sample Document 2",32,"Jane Smith","Article","Non-fiction","Beginner","PDF","research, science, technology"
+"YouTube Video Example",28,"Tech Channel","Video","Educational","Advanced","YouTube","tutorial, programming, AI" 

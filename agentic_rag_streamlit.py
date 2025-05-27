@@ -131,11 +131,12 @@ with tab1:
     if "messages" not in st.session_state:
         st.session_state.messages = []
 
-    # Create a scrollable container for chat messages
-    chat_container = st.container()
+    # Create a fixed-height container for messages that can scroll
+    # This creates the scrollable chat area
+    messages_container = st.container(height=500)
     
-    # Display all chat messages in the container
-    with chat_container:
+    with messages_container:
+        # Display all chat messages
         for i, message in enumerate(st.session_state.messages):
             if isinstance(message, HumanMessage):
                 with st.chat_message("user"):
@@ -144,11 +145,8 @@ with tab1:
                 with st.chat_message("assistant"):
                     st.markdown(message.content)
                     
-                    # Add feedback buttons for ALL AI messages (not just old ones)
-                    # Get the corresponding user query (comes before the AI message)
+                    # Add feedback buttons for ALL AI messages
                     user_query = st.session_state.messages[i-1].content if i > 0 else ""
-                    
-                    # Create a unique key for this message's feedback
                     message_key = f"msg_{i}_{hash(message.content)}"
                     
                     # Add feedback buttons
@@ -178,15 +176,15 @@ with tab1:
                             feedback_handler.store_detailed_feedback(user_query, message.content, rating, comment)
                             st.success("Thank you for your feedback!")
 
-    # Chat input - this will always stay at the bottom
+    # Chat input - this stays fixed at the bottom, outside the scrollable container
     user_question = st.chat_input("Ask me about the documents in your library...")
 
     # Process new user input
     if user_question:
-        # Add user message to session state first
+        # Add user message to session state
         st.session_state.messages.append(HumanMessage(user_question))
 
-        # Look for relevant feedback that might contain corrections
+        # Look for relevant feedback
         try:
             relevant_feedback = feedback_handler.get_relevant_feedback(user_question, embeddings_model=embeddings)
         except TypeError:
@@ -230,56 +228,105 @@ with tab2:
         st.rerun()
     
     try:
-        # Get all documents from Supabase
-        with st.spinner("Loading vector store data..."):
-            result = supabase.table("documents").select("id, metadata").limit(50000).execute()
-            documents = result.data
+        # Try to read from CSV first (faster and more reliable)
+        import pandas as pd
+        csv_file = "documents_metadata.csv"
         
-        if not documents:
-            st.info("No documents found in the vector store.")
-        else:
-            st.success(f"Found {len(documents)} total chunks in the vector store")
+        if os.path.exists(csv_file):
+            st.info("📄 Loading from CSV file...")
+            df = pd.read_csv(csv_file)
             
-            # Count documents by title and collect metadata
-            title_counts = {}
-            metadata_by_title = {}
-            
-            for doc in documents:
-                metadata = doc.get("metadata", {})
-                title = metadata.get("title", "Unknown")
-                
-                if title not in title_counts:
-                    title_counts[title] = 0
-                    metadata_by_title[title] = metadata
-                
-                title_counts[title] += 1
-            
-            # Create display data
+            # Convert DataFrame to the format we need
             display_data = []
-            for title, count in title_counts.items():
-                metadata = metadata_by_title[title]
+            for _, row in df.iterrows():
                 display_data.append({
-                    "Title": title,
-                    "Chunks": count,
-                    "Author": metadata.get("author", "Unknown"),
-                    "Type": metadata.get("type", "Unknown"),
-                    "Genre": metadata.get("genre", "Unknown"),
-                    "Difficulty": metadata.get("difficulty", "Unknown"),
-                    "Source Type": metadata.get("source_type", "Unknown"),
-                    "Tags": metadata.get("tags", "Unknown")[:50] + "..." if len(str(metadata.get("tags", "Unknown"))) > 50 else metadata.get("tags", "Unknown")
+                    "Title": row.get("title", "Unknown"),
+                    "Chunks": row.get("chunks", 0),
+                    "Author": row.get("author", "Unknown"),
+                    "Type": row.get("type", "Unknown"),
+                    "Genre": row.get("genre", "Unknown"),
+                    "Difficulty": row.get("difficulty", "Unknown"),
+                    "Source Type": row.get("source_type", "Unknown"),
+                    "Tags": str(row.get("tags", "Unknown"))[:50] + "..." if len(str(row.get("tags", "Unknown"))) > 50 else str(row.get("tags", "Unknown"))
                 })
             
+            total_chunks = df["chunks"].sum() if "chunks" in df.columns else len(df)
+            st.success(f"✅ Loaded {len(df)} documents with {total_chunks} total chunks from CSV")
+            
+        else:
+            st.warning("📄 CSV file not found. Falling back to Supabase query...")
+            # Fallback to Supabase if CSV doesn't exist
+            with st.spinner("Loading from Supabase..."):
+                result = supabase.table("documents").select("id, metadata").limit(50000).execute()
+                documents = result.data
+            
+            if not documents:
+                st.info("No documents found in the vector store.")
+                display_data = []
+                total_chunks = 0
+            else:
+                # Count documents by title and collect metadata
+                title_counts = {}
+                metadata_by_title = {}
+                
+                for doc in documents:
+                    metadata = doc.get("metadata", {})
+                    title = metadata.get("title", "Unknown")
+                    
+                    if title not in title_counts:
+                        title_counts[title] = 0
+                        metadata_by_title[title] = metadata
+                    
+                    title_counts[title] += 1
+                
+                # Create display data
+                display_data = []
+                for title, count in title_counts.items():
+                    metadata = metadata_by_title[title]
+                    display_data.append({
+                        "Title": title,
+                        "Chunks": count,
+                        "Author": metadata.get("author", "Unknown"),
+                        "Type": metadata.get("type", "Unknown"),
+                        "Genre": metadata.get("genre", "Unknown"),
+                        "Difficulty": metadata.get("difficulty", "Unknown"),
+                        "Source Type": metadata.get("source_type", "Unknown"),
+                        "Tags": metadata.get("tags", "Unknown")[:50] + "..." if len(str(metadata.get("tags", "Unknown"))) > 50 else metadata.get("tags", "Unknown")
+                    })
+                
+                total_chunks = len(documents)
+                st.success(f"📊 Loaded {len(title_counts)} documents with {total_chunks} total chunks from Supabase")
+                
+                # Offer to create CSV for future use
+                if st.button("💾 Save to CSV for faster loading"):
+                    df_to_save = pd.DataFrame([
+                        {
+                            "title": item["Title"],
+                            "chunks": item["Chunks"],
+                            "author": item["Author"],
+                            "type": item["Type"],
+                            "genre": item["Genre"],
+                            "difficulty": item["Difficulty"],
+                            "source_type": item["Source Type"],
+                            "tags": item["Tags"]
+                        }
+                        for item in display_data
+                    ])
+                    df_to_save.to_csv(csv_file, index=False)
+                    st.success(f"✅ Saved {len(df_to_save)} documents to {csv_file}")
+        
+        if display_data:
             # Sort by number of chunks
             display_data.sort(key=lambda x: x["Chunks"], reverse=True)
             
             # Display summary stats
             col1, col2, col3 = st.columns(3)
             with col1:
-                st.metric("Unique Documents", len(title_counts))
+                st.metric("Unique Documents", len(display_data))
             with col2:
-                st.metric("Total Chunks", len(documents))
+                st.metric("Total Chunks", total_chunks)
             with col3:
-                avg_chunks = len(documents) / len(title_counts) if title_counts else 0
+                avg_chunks = total_chunks / len(display_data) if display_data else 0
                 st.metric("Avg Chunks/Doc", f"{avg_chunks:.1f}")
             
             # Display the data table
@@ -301,9 +348,12 @@ with tab2:
             if filtered_data != display_data:
                 st.subheader("Filtered Results")
                 st.dataframe(filtered_data, use_container_width=True)
+        else:
+            st.info("No documents found.")
                 
     except Exception as e:
-        st.error(f"Error loading vector store data: {e}")
+        st.error(f"Error loading document data: {e}")
+        st.info("💡 Try creating a documents_metadata.csv file with columns: title, chunks, author, type, genre, difficulty, source_type, tags")
 
 # TAB 3: DOCUMENT UPLOAD
 with tab3:
@@ -312,6 +362,40 @@ with tab3:
     
     # Create sub-tabs for different upload types
     upload_tab1, upload_tab2 = st.tabs(["📄 PDF Upload", "🎥 YouTube URL"])
+    
+    def add_document_to_csv(title, chunks, author, doc_type, genre, difficulty, source_type, tags):
+        """Add a new document entry to the CSV file."""
+        try:
+            import pandas as pd
+            csv_file = "documents_metadata.csv"
+            
+            # Create new row
+            new_row = {
+                "title": title,
+                "chunks": chunks,
+                "author": author,
+                "type": doc_type,
+                "genre": genre,
+                "difficulty": difficulty,
+                "source_type": source_type,
+                "tags": tags
+            }
+            
+            # Read existing CSV or create new DataFrame
+            if os.path.exists(csv_file):
+                df = pd.read_csv(csv_file)
+            else:
+                df = pd.DataFrame(columns=["title", "chunks", "author", "type", "genre", "difficulty", "source_type", "tags"])
+            
+            # Add new row
+            df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+            
+            # Save back to CSV
+            df.to_csv(csv_file, index=False)
+            return True
+        except Exception as e:
+            st.error(f"Error updating CSV: {e}")
+            return False
     
     with upload_tab1:
         st.subheader("Upload PDF Documents")
@@ -327,9 +411,49 @@ with tab3:
             for file in uploaded_files:
                 st.write(f"- {file.name} ({file.size} bytes)")
             
-            if st.button("Process PDF Files", type="primary"):
-                st.info("PDF processing functionality will be implemented here")
-                # TODO: Implement PDF processing
+            # Metadata form for PDF uploads
+            with st.form("pdf_metadata_form"):
+                st.subheader("Document Metadata")
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    author = st.text_input("Author", placeholder="Enter author name")
+                    doc_type = st.selectbox("Type", ["Book", "Article", "Report", "Paper", "Manual", "Other"])
+                    genre = st.selectbox("Genre", ["Fiction", "Non-fiction", "Technical", "Academic", "Business", "Educational", "Other"])
+                
+                with col2:
+                    difficulty = st.selectbox("Difficulty", ["Beginner", "Intermediate", "Advanced", "Expert"])
+                    tags = st.text_input("Tags", placeholder="comma, separated, tags")
+                
+                submitted = st.form_submit_button("Process PDF Files", type="primary")
+                
+                if submitted:
+                    for file in uploaded_files:
+                        # Extract title from filename (remove .pdf extension)
+                        title = file.name.replace('.pdf', '')
+                        
+                        # TODO: Implement actual PDF processing here
+                        # For now, simulate chunk count
+                        estimated_chunks = file.size // 1000  # Rough estimate
+                        
+                        # Add to CSV
+                        success = add_document_to_csv(
+                            title=title,
+                            chunks=estimated_chunks,
+                            author=author,
+                            doc_type=doc_type,
+                            genre=genre,
+                            difficulty=difficulty,
+                            source_type="PDF",
+                            tags=tags
+                        )
+                        
+                        if success:
+                            st.success(f"✅ Added {title} to document registry")
+                        else:
+                            st.error(f"❌ Failed to add {title}")
+                    
+                    st.info("📝 PDF processing functionality will be implemented to actually process and embed the documents")
     
     with upload_tab2:
         st.subheader("Add YouTube Videos")
@@ -340,7 +464,120 @@ with tab3:
         )
         
         if youtube_url:
-            if st.button("Process YouTube Video", type="primary"):
-                st.info("YouTube processing functionality will be implemented here")
-                # TODO: Implement YouTube processing
+            # Metadata form for YouTube videos
+            with st.form("youtube_metadata_form"):
+                st.subheader("Video Metadata")
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    title = st.text_input("Title", placeholder="Video title (auto-detected if empty)")
+                    author = st.text_input("Channel/Author", placeholder="Channel name")
+                    genre = st.selectbox("Genre", ["Educational", "Tutorial", "Documentary", "Interview", "Lecture", "Other"])
+                
+                with col2:
+                    difficulty = st.selectbox("Difficulty", ["Beginner", "Intermediate", "Advanced", "Expert"])
+                    tags = st.text_input("Tags", placeholder="comma, separated, tags")
+                
+                submitted = st.form_submit_button("Process YouTube Video", type="primary")
+                
+                if submitted:
+                    # TODO: Implement actual YouTube processing here
+                    # For now, simulate the process
+                    if not title:
+                        title = f"YouTube Video - {youtube_url.split('=')[-1][:8]}"
+                    
+                    estimated_chunks = 25  # Rough estimate for video transcript
+                    
+                    # Add to CSV
+                    success = add_document_to_csv(
+                        title=title,
+                        chunks=estimated_chunks,
+                        author=author,
+                        doc_type="Video",
+                        genre=genre,
+                        difficulty=difficulty,
+                        source_type="YouTube",
+                        tags=tags
+                    )
+                    
+                    if success:
+                        st.success(f"✅ Added {title} to document registry")
+                    else:
+                        st.error(f"❌ Failed to add {title}")
+                    
+                    st.info("📝 YouTube processing functionality will be implemented to actually extract and embed the transcript")
+    
+    # CSV Management Section
+    st.divider()
+    st.subheader("📊 CSV Management")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        if st.button("📄 View CSV File"):
+            try:
+                import pandas as pd
+                if os.path.exists("documents_metadata.csv"):
+                    df = pd.read_csv("documents_metadata.csv")
+                    st.dataframe(df, use_container_width=True)
+                else:
+                    st.warning("CSV file not found")
+            except Exception as e:
+                st.error(f"Error reading CSV: {e}")
+    
+    with col2:
+        if st.button("🔄 Sync from Supabase"):
+            try:
+                with st.spinner("Syncing from Supabase..."):
+                    result = supabase.table("documents").select("id, metadata").limit(50000).execute()
+                    documents = result.data
+                    
+                    if documents:
+                        # Process and save to CSV
+                        title_counts = {}
+                        metadata_by_title = {}
+                        
+                        for doc in documents:
+                            metadata = doc.get("metadata", {})
+                            title = metadata.get("title", "Unknown")
+                            
+                            if title not in title_counts:
+                                title_counts[title] = 0
+                                metadata_by_title[title] = metadata
+                            
+                            title_counts[title] += 1
+                        
+                        # Create DataFrame
+                        data = []
+                        for title, count in title_counts.items():
+                            metadata = metadata_by_title[title]
+                            data.append({
+                                "title": title,
+                                "chunks": count,
+                                "author": metadata.get("author", "Unknown"),
+                                "type": metadata.get("type", "Unknown"),
+                                "genre": metadata.get("genre", "Unknown"),
+                                "difficulty": metadata.get("difficulty", "Unknown"),
+                                "source_type": metadata.get("source_type", "Unknown"),
+                                "tags": metadata.get("tags", "Unknown")
+                            })
+                        
+                        df = pd.DataFrame(data)
+                        df.to_csv("documents_metadata.csv", index=False)
+                        st.success(f"✅ Synced {len(df)} documents to CSV")
+                    else:
+                        st.warning("No documents found in Supabase")
+            except Exception as e:
+                st.error(f"Error syncing from Supabase: {e}")
+    
+    with col3:
+        uploaded_csv = st.file_uploader("📤 Upload CSV", type="csv", help="Upload a CSV file to replace the current document registry")
+        if uploaded_csv:
+            try:
+                import pandas as pd
+                df = pd.read_csv(uploaded_csv)
+                df.to_csv("documents_metadata.csv", index=False)
+                st.success(f"✅ Uploaded CSV with {len(df)} documents")
+            except Exception as e:
+                st.error(f"Error uploading CSV: {e}")
 

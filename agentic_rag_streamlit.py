@@ -143,7 +143,12 @@ with tab1:
             st.session_state.messages.append(HumanMessage(user_question))
 
         # Look for relevant feedback that might contain corrections
-        relevant_feedback = feedback_handler.get_relevant_feedback(user_question, embeddings_model=embeddings)
+        try:
+            # Try new method with embeddings model
+            relevant_feedback = feedback_handler.get_relevant_feedback(user_question, embeddings_model=embeddings)
+        except TypeError:
+            # Fall back to old method without embeddings model (for backward compatibility)
+            relevant_feedback = feedback_handler.get_relevant_feedback(user_question)
         
         # invoking the agent
         with st.spinner("Thinking..."):

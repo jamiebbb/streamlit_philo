@@ -3,6 +3,14 @@ from datetime import datetime
 import streamlit as st
 import uuid
 
+try:
+    import numpy as np
+except ImportError:
+    st.error("NumPy is required for embedding-based feedback. Installing...")
+    import subprocess
+    subprocess.check_call(["pip", "install", "numpy"])
+    import numpy as np
+
 class FeedbackHandler:
     def __init__(self, supabase_client):
         """Initialize the feedback handler with a Supabase client."""
@@ -134,15 +142,16 @@ class FeedbackHandler:
             print(f"Error getting feedback stats: {e}")
             return None
             
-    def get_relevant_feedback(self, query, similarity_threshold=0.7):
-        """Retrieve relevant feedback for a given query.
+    def get_relevant_feedback(self, query, similarity_threshold=0.75, embeddings_model=None):
+        """Retrieve relevant feedback for a given query using embeddings.
         
         This method searches for past feedback that might be relevant to the current query,
-        especially looking for detailed feedback that contains corrections.
+        using semantic similarity via embeddings instead of keyword matching.
         
         Args:
             query: The current user query
-            similarity_threshold: Minimum similarity score to consider feedback relevant
+            similarity_threshold: Minimum similarity score to consider feedback relevant (0.0-1.0)
+            embeddings_model: OpenAI embeddings model instance
             
         Returns:
             A list of relevant feedback entries with corrections
@@ -157,34 +166,76 @@ class FeedbackHandler:
             detailed_feedback = result.data
             relevant_feedback = []
             
-            # For now, use simple keyword matching
-            # In a production system, you'd use embeddings and semantic search
-            query_keywords = set(query.lower().split())
+            if not detailed_feedback:
+                return relevant_feedback
             
-            for item in detailed_feedback:
-                past_query = item.get("query", "").lower()
-                # Simple keyword overlap check
-                past_keywords = set(past_query.split())
-                common_keywords = query_keywords.intersection(past_keywords)
-                
-                # Calculate simple similarity score
-                similarity = len(common_keywords) / max(len(query_keywords), len(past_keywords))
-                
-                # If the queries are similar and there's a comment in the metadata
-                if similarity >= similarity_threshold:
-                    metadata = item.get("metadata", {})
-                    comment = metadata.get("comment", "")
-                    rating = metadata.get("rating", 0)
+            # If embeddings model is provided, use semantic similarity
+            if embeddings_model:
+                try:
+                    # Get embedding for current query
+                    query_embedding = embeddings_model.embed_query(query)
                     
-                    # Only include feedback with actual comments and low ratings
-                    if comment and rating <= 3:
-                        relevant_feedback.append({
-                            "past_query": item.get("query"),
-                            "past_response": item.get("response"),
-                            "comment": comment,
-                            "rating": rating,
-                            "similarity": similarity
-                        })
+                    for item in detailed_feedback:
+                        try:
+                            past_query = item.get("query", "")
+                            metadata = item.get("metadata", {})
+                            comment = metadata.get("comment", "")
+                            rating = metadata.get("rating", 0)
+                            
+                            # Only process feedback with actual comments and low ratings
+                            if comment and rating <= 3 and past_query:
+                                # Get embedding for past query
+                                past_query_embedding = embeddings_model.embed_query(past_query)
+                                
+                                # Calculate cosine similarity
+                                similarity = self._cosine_similarity(query_embedding, past_query_embedding)
+                                
+                                if similarity >= similarity_threshold:
+                                    relevant_feedback.append({
+                                        "past_query": past_query,
+                                        "past_response": item.get("response"),
+                                        "comment": comment,
+                                        "rating": rating,
+                                        "similarity": similarity
+                                    })
+                        except Exception as e:
+                            print(f"Error processing individual feedback item: {e}")
+                            continue
+                            
+                except Exception as e:
+                    print(f"Error with embeddings, falling back to keyword matching: {e}")
+                    # Fall back to keyword matching
+                    embeddings_model = None
+            
+            # Fallback to keyword matching if no embeddings model provided or embeddings failed
+            if not embeddings_model:
+                query_keywords = set(query.lower().split())
+                
+                for item in detailed_feedback:
+                    try:
+                        past_query = item.get("query", "").lower()
+                        past_keywords = set(past_query.split())
+                        common_keywords = query_keywords.intersection(past_keywords)
+                        
+                        # Calculate simple similarity score
+                        similarity = len(common_keywords) / max(len(query_keywords), len(past_keywords)) if query_keywords or past_keywords else 0
+                        
+                        if similarity >= similarity_threshold:
+                            metadata = item.get("metadata", {})
+                            comment = metadata.get("comment", "")
+                            rating = metadata.get("rating", 0)
+                            
+                            if comment and rating <= 3:
+                                relevant_feedback.append({
+                                    "past_query": item.get("query"),
+                                    "past_response": item.get("response"),
+                                    "comment": comment,
+                                    "rating": rating,
+                                    "similarity": similarity
+                                })
+                    except Exception as e:
+                        print(f"Error processing feedback item in keyword mode: {e}")
+                        continue
             
             # Sort by similarity
             relevant_feedback.sort(key=lambda x: x["similarity"], reverse=True)
@@ -192,4 +243,32 @@ class FeedbackHandler:
             
         except Exception as e:
             print(f"Error retrieving relevant feedback: {e}")
-            return [] 
+            return []
+    
+    def _cosine_similarity(self, vec1, vec2):
+        """Calculate cosine similarity between two vectors."""
+        try:
+            # Convert to numpy arrays
+            vec1 = np.array(vec1, dtype=float)
+            vec2 = np.array(vec2, dtype=float)
+            
+            # Check for valid vectors
+            if len(vec1) == 0 or len(vec2) == 0 or len(vec1) != len(vec2):
+                return 0.0
+            
+            # Calculate cosine similarity
+            dot_product = np.dot(vec1, vec2)
+            norm1 = np.linalg.norm(vec1)
+            norm2 = np.linalg.norm(vec2)
+            
+            if norm1 == 0 or norm2 == 0:
+                return 0.0
+            
+            similarity = dot_product / (norm1 * norm2)
+            
+            # Ensure similarity is between 0 and 1
+            return max(0.0, min(1.0, float(similarity)))
+            
+        except Exception as e:
+            print(f"Error calculating cosine similarity: {e}")
+            return 0.0 

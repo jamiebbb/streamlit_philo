@@ -32,7 +32,7 @@ class EnhancedSupabaseVectorStore(SupabaseVectorStore):
         """
         try:
             # Check if enhanced columns exist by trying to select them
-            result = self.client.table(self.table_name).select(
+            result = self._client.table(self.table_name).select(
                 "id, title, author, doc_type, genre, topic, difficulty, tags, source_type, summary"
             ).limit(1).execute()
             print("✅ Enhanced columns already exist")
@@ -160,7 +160,7 @@ class EnhancedSupabaseVectorStore(SupabaseVectorStore):
                 
                 # Insert into enhanced table
                 try:
-                    result = self.client.table(self.table_name).insert(insert_data).execute()
+                    result = self._client.table(self.table_name).insert(insert_data).execute()
                     
                     # Debug: Print result
                     print(f"📊 Debug - Insert result success: {len(result.data) > 0}")
@@ -211,7 +211,7 @@ class EnhancedSupabaseVectorStore(SupabaseVectorStore):
                 }
                 
                 # Update the dedicated columns
-                result = self.client.table(self.table_name).update(update_data).eq("id", doc_id).execute()
+                result = self._client.table(self.table_name).update(update_data).eq("id", doc_id).execute()
                 
             print(f"✅ Updated dedicated columns for {len(documents)} documents")
             
@@ -231,7 +231,7 @@ class EnhancedSupabaseVectorStore(SupabaseVectorStore):
             List of document metadata dictionaries
         """
         try:
-            query = self.client.table(self.table_name).select("*")
+            query = self._client.table(self.table_name).select("*")
             
             # Apply filters using dedicated columns for fast performance
             for field, value in filters.items():
@@ -258,18 +258,18 @@ class EnhancedSupabaseVectorStore(SupabaseVectorStore):
         """
         try:
             # Get total count
-            total_result = self.client.table(self.table_name).select("id", count="exact").execute()
+            total_result = self._client.table(self.table_name).select("id", count="exact").execute()
             total_docs = total_result.count
             
             # Get counts by type using dedicated columns
-            type_result = self.client.table(self.table_name).select("doc_type").execute()
+            type_result = self._client.table(self.table_name).select("doc_type").execute()
             type_counts = {}
             for row in type_result.data:
                 doc_type = row.get("doc_type", "Unknown")
                 type_counts[doc_type] = type_counts.get(doc_type, 0) + 1
             
             # Get counts by difficulty
-            difficulty_result = self.client.table(self.table_name).select("difficulty").execute()
+            difficulty_result = self._client.table(self.table_name).select("difficulty").execute()
             difficulty_counts = {}
             for row in difficulty_result.data:
                 difficulty = row.get("difficulty", "Unknown")

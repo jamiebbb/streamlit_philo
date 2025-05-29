@@ -54,6 +54,9 @@ feedback_handler.test_supabase_connection()
 embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
 
 # Always use enhanced vector store
+vector_store_status = "unknown"
+vector_store_error = None
+
 try:
     vector_store = create_enhanced_vector_store(
         supabase_client=supabase,
@@ -61,15 +64,26 @@ try:
         table_name="documents_enhanced"
     )
     print("✅ Using Enhanced Vector Store")
+    vector_store_status = "enhanced"
 except Exception as e:
     print(f"❌ Enhanced store failed: {e}")
+    vector_store_error = str(e)
     print("Falling back to standard vector store")
-    vector_store = SupabaseVectorStore(
-        embedding=embeddings,
-        client=supabase,
-        table_name="documents",
-        query_name="match_documents",
-    )
+    try:
+        vector_store = SupabaseVectorStore(
+            embedding=embeddings,
+            client=supabase,
+            table_name="documents",
+            query_name="match_documents",
+        )
+        print("✅ Using Standard Vector Store")
+        vector_store_status = "standard"
+    except Exception as e2:
+        print(f"❌ Standard store also failed: {e2}")
+        vector_store_status = "failed"
+        vector_store_error = f"Enhanced: {e}, Standard: {e2}"
+        # Create a dummy vector store that will show helpful error messages
+        vector_store = None
 
 # initiating llm
 llm = ChatOpenAI(model="gpt-4o-mini",temperature=0)
@@ -114,12 +128,22 @@ prompt = custom_prompt
 @tool(response_format="content_and_artifact")
 def retrieve(query: str):
     """Retrieve information related to a query."""
-    retrieved_docs = vector_store.similarity_search(query, k=2)
-    serialized = "\n\n".join(
-        (f"Source: {doc.metadata}\n" f"Content: {doc.page_content}")
-        for doc in retrieved_docs
-    )
-    return serialized, retrieved_docs
+    if vector_store is None:
+        return f"Error: Vector store initialization failed. Please check your database setup. Error details: {vector_store_error}", []
+    
+    try:
+        retrieved_docs = vector_store.similarity_search(query, k=2)
+        serialized = "\n\n".join(
+            (f"Source: {doc.metadata}\n" f"Content: {doc.page_content}")
+            for doc in retrieved_docs
+        )
+        return serialized, retrieved_docs
+    except Exception as e:
+        error_msg = str(e)
+        if "does not exist" in error_msg.lower() or "relation" in error_msg.lower():
+            return f"Error: The documents table doesn't exist yet. Please upload some documents first or run the database setup SQL script. Details: {error_msg}", []
+        else:
+            return f"Error retrieving documents: {error_msg}", []
 
 # combining all tools
 tools = [retrieve]
@@ -240,6 +264,32 @@ CREATE TABLE IF NOT EXISTS documents_enhanced (
         
         st.divider()
         st.markdown("### Debug")
+        
+        # Vector Store Status
+        if vector_store_status == "enhanced":
+            st.success("✅ Enhanced Vector Store Active")
+        elif vector_store_status == "standard":
+            st.warning("⚠️ Using Standard Vector Store (Enhanced failed)")
+        elif vector_store_status == "failed":
+            st.error("❌ Vector Store Failed to Initialize")
+            if vector_store_error:
+                with st.expander("Error Details", expanded=False):
+                    st.code(vector_store_error)
+        
+        if st.button("🧪 Test Vector Store"):
+            if vector_store is None:
+                st.error("❌ Vector store not initialized!")
+                st.info("Please run the database setup SQL script first.")
+            else:
+                try:
+                    # Try a simple query
+                    test_docs = vector_store.similarity_search("test", k=1)
+                    st.success(f"✅ Vector store working! Found {len(test_docs)} documents.")
+                except Exception as e:
+                    st.error(f"❌ Vector store error: {e}")
+                    if "does not exist" in str(e).lower():
+                        st.info("💡 The documents table doesn't exist. Please run the SQL setup script or upload some documents.")
+        
         if st.button("🧪 Test Feedback System"):
             success = feedback_handler.store_feedback(
                 "test query", 
@@ -1032,27 +1082,25 @@ with tab3:
                             
                             with col1:
                                 st.markdown("**🟢 First Chunk:**")
-                                with st.expander("View First Chunk", expanded=True):
-                                    st.text_area(
-                                        "First chunk content:",
-                                        value=chunks[0].page_content,
-                                        height=200,
-                                        key=f"first_chunk_{file_key}",
-                                        disabled=True
-                                    )
-                                    st.caption(f"Length: {len(chunks[0].page_content)} characters")
+                                st.text_area(
+                                    "First chunk content:",
+                                    value=chunks[0].page_content,
+                                    height=200,
+                                    key=f"first_chunk_{file_key}",
+                                    disabled=True
+                                )
+                                st.caption(f"Length: {len(chunks[0].page_content)} characters")
                             
                             with col2:
                                 st.markdown("**🔴 Last Chunk:**")
-                                with st.expander("View Last Chunk", expanded=True):
-                                    st.text_area(
-                                        "Last chunk content:",
-                                        value=chunks[-1].page_content,
-                                        height=200,
-                                        key=f"last_chunk_{file_key}",
-                                        disabled=True
-                                    )
-                                    st.caption(f"Length: {len(chunks[-1].page_content)} characters")
+                                st.text_area(
+                                    "Last chunk content:",
+                                    value=chunks[-1].page_content,
+                                    height=200,
+                                    key=f"last_chunk_{file_key}",
+                                    disabled=True
+                                )
+                                st.caption(f"Length: {len(chunks[-1].page_content)} characters")
                             
                             # Show chunk statistics
                             chunk_lengths = [len(chunk.page_content) for chunk in chunks]
@@ -1069,18 +1117,18 @@ with tab3:
                             """)
                             
                             if len(chunks) > 2:
-                                with st.expander("🔍 View All Chunk Lengths", expanded=False):
-                                    import pandas as pd
-                                    chunk_data = []
-                                    for i, chunk in enumerate(chunks):
-                                        chunk_data.append({
-                                            "Chunk #": i + 1,
-                                            "Length": len(chunk.page_content),
-                                            "Preview": chunk.page_content[:100] + "..." if len(chunk.page_content) > 100 else chunk.page_content
-                                        })
-                                    
-                                    df_chunks = pd.DataFrame(chunk_data)
-                                    st.dataframe(df_chunks, use_container_width=True)
+                                st.markdown("**🔍 All Chunk Lengths:**")
+                                import pandas as pd
+                                chunk_data = []
+                                for i, chunk in enumerate(chunks):
+                                    chunk_data.append({
+                                        "Chunk #": i + 1,
+                                        "Length": len(chunk.page_content),
+                                        "Preview": chunk.page_content[:100] + "..." if len(chunk.page_content) > 100 else chunk.page_content
+                                    })
+                                
+                                df_chunks = pd.DataFrame(chunk_data)
+                                st.dataframe(df_chunks, use_container_width=True, height=200)
     
     with upload_tab2:
         st.subheader("Add YouTube Videos")

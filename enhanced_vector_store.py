@@ -112,6 +112,9 @@ class EnhancedSupabaseVectorStore(SupabaseVectorStore):
                 
                 metadata = doc.metadata
                 
+                # Debug: Print metadata to see what we're working with
+                print(f"📊 Debug - Document metadata: {metadata}")
+                
                 # Prepare data for insertion with all columns
                 insert_data = {
                     "id": doc_id,
@@ -130,11 +133,19 @@ class EnhancedSupabaseVectorStore(SupabaseVectorStore):
                     "summary": metadata.get("summary", "")
                 }
                 
+                # Debug: Print what we're inserting
+                print(f"📊 Debug - Insert data: {insert_data}")
+                
                 # Insert into enhanced table
                 result = self.client.table(self.table_name).insert(insert_data).execute()
                 
+                # Debug: Print result
+                print(f"📊 Debug - Insert result: {result.data}")
+                
                 if not result.data:
                     print(f"Warning: No data returned for document {doc_id}")
+                else:
+                    print(f"✅ Successfully inserted document {doc_id} with metadata columns")
             
             print(f"✅ Successfully added {len(documents)} documents to enhanced table")
             return doc_ids

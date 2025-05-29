@@ -130,17 +130,98 @@ prompt = custom_prompt
 # creating the retriever tool
 @tool(response_format="content_and_artifact")
 def retrieve(query: str):
-    """Retrieve information related to a query."""
+    """Retrieve information related to a query using enhanced search strategies."""
     if vector_store is None:
         return f"Error: Vector store initialization failed. Please check your database setup. Error details: {vector_store_error}", []
     
     try:
-        retrieved_docs = vector_store.similarity_search(query, k=2)
-        serialized = "\n\n".join(
-            (f"Source: {doc.metadata}\n" f"Content: {doc.page_content}")
-            for doc in retrieved_docs
-        )
-        return serialized, retrieved_docs
+        # Primary search: Semantic similarity with more results
+        retrieved_docs = vector_store.similarity_search(query, k=5)
+        
+        # If we have enhanced vector store, try additional searches for better coverage
+        if hasattr(vector_store, 'search_by_metadata') and len(retrieved_docs) < 3:
+            # Extract potential book/document titles from query
+            query_lower = query.lower()
+            potential_titles = []
+            
+            # Look for quoted titles or common book patterns
+            import re
+            quoted_matches = re.findall(r'"([^"]+)"', query)
+            potential_titles.extend(quoted_matches)
+            
+            # Look for book-like phrases
+            book_patterns = [
+                r'book\s+(?:called\s+)?["\']?([^"\']+?)["\']?(?:\s|$)',
+                r'(?:the\s+)?book\s+["\']?([^"\']+?)["\']?',
+                r'["\']([^"\']{3,30})["\']',  # Any quoted text
+            ]
+            
+            for pattern in book_patterns:
+                matches = re.findall(pattern, query, re.IGNORECASE)
+                potential_titles.extend(matches)
+            
+            # Try metadata search for potential titles
+            for title in potential_titles[:3]:  # Limit to avoid too many searches
+                title_clean = title.strip().strip('"\'')
+                if len(title_clean) > 2:
+                    try:
+                        # Search by title in metadata
+                        metadata_results = vector_store.search_by_metadata(
+                            {"title": title_clean}, limit=3
+                        )
+                        
+                        # Convert metadata results to Document objects
+                        for result in metadata_results:
+                            if result.get("content"):
+                                from langchain_core.documents import Document
+                                doc = Document(
+                                    page_content=result["content"],
+                                    metadata={
+                                        "title": result.get("title", "Unknown"),
+                                        "author": result.get("author", "Unknown"),
+                                        "doc_type": result.get("doc_type", "Unknown"),
+                                        "source": f"Metadata search for: {title_clean}"
+                                    }
+                                )
+                                retrieved_docs.append(doc)
+                    except Exception as e:
+                        print(f"Metadata search failed for '{title_clean}': {e}")
+        
+        # Remove duplicates based on content
+        unique_docs = []
+        seen_content = set()
+        for doc in retrieved_docs:
+            content_hash = hash(doc.page_content[:100])  # Use first 100 chars as identifier
+            if content_hash not in seen_content:
+                seen_content.add(content_hash)
+                unique_docs.append(doc)
+        
+        retrieved_docs = unique_docs[:8]  # Limit to 8 total documents
+        
+        # Enhanced serialization with better source information
+        serialized_parts = []
+        for i, doc in enumerate(retrieved_docs):
+            metadata = doc.metadata
+            title = metadata.get("title", "Unknown Document")
+            author = metadata.get("author", "Unknown Author")
+            doc_type = metadata.get("doc_type", metadata.get("type", "Unknown Type"))
+            
+            source_info = f"Document {i+1}: {title} by {author} ({doc_type})"
+            content_preview = doc.page_content[:1000] + "..." if len(doc.page_content) > 1000 else doc.page_content
+            
+            serialized_parts.append(f"Source: {source_info}\nContent: {content_preview}")
+        
+        serialized = "\n\n" + "="*50 + "\n\n".join(serialized_parts)
+        
+        # Add search summary
+        search_summary = f"Found {len(retrieved_docs)} relevant documents for query: '{query}'"
+        if len(retrieved_docs) == 0:
+            search_summary += "\n\nNo documents found. This could mean:\n1. The document hasn't been uploaded\n2. The search terms don't match the content\n3. Try different keywords or check the Vector Store tab"
+        
+        final_result = f"{search_summary}\n\n{serialized}"
+        
+        return final_result, retrieved_docs
+        
     except Exception as e:
         error_msg = str(e)
         if "does not exist" in error_msg.lower() or "relation" in error_msg.lower():
@@ -150,6 +231,34 @@ def retrieve(query: str):
 
 # combining all tools
 tools = [retrieve]
+
+# Add debug tool for testing
+@tool(response_format="content_and_artifact")
+def debug_search(query: str):
+    """Debug tool to test search functionality and show available documents."""
+    if vector_store is None:
+        return "Vector store not initialized", []
+    
+    try:
+        # Test basic search
+        docs = vector_store.similarity_search(query, k=10)
+        
+        # Get some sample documents to show what's available
+        if hasattr(vector_store, 'search_by_metadata'):
+            sample_docs = vector_store.search_by_metadata({}, limit=5)
+            sample_info = "Sample documents in database:\n"
+            for doc in sample_docs:
+                sample_info += f"- {doc.get('title', 'Unknown')} by {doc.get('author', 'Unknown')}\n"
+        else:
+            sample_info = "Enhanced search not available"
+        
+        result = f"Search for '{query}' found {len(docs)} documents.\n\n{sample_info}"
+        return result, docs
+    except Exception as e:
+        return f"Debug search failed: {e}", []
+
+# Add debug tool to tools list for testing (comment out in production)
+# tools.append(debug_search)
 
 # initiating the agent
 agent = create_tool_calling_agent(llm, tools, prompt)
@@ -285,13 +394,40 @@ CREATE TABLE IF NOT EXISTS documents_enhanced (
                 st.info("Please run the database setup SQL script first.")
             else:
                 try:
-                    # Try a simple query
+                    # Test 1: Basic connectivity
                     test_docs = vector_store.similarity_search("test", k=1)
                     st.success(f"✅ Vector store working! Found {len(test_docs)} documents.")
+                    
+                    # Test 2: Show sample documents
+                    if hasattr(vector_store, 'search_by_metadata'):
+                        sample_docs = vector_store.search_by_metadata({}, limit=10)
+                        if sample_docs:
+                            st.info(f"📚 Found {len(sample_docs)} total documents in enhanced store:")
+                            for i, doc in enumerate(sample_docs[:5]):
+                                st.write(f"{i+1}. **{doc.get('title', 'Unknown')}** by {doc.get('author', 'Unknown')} ({doc.get('doc_type', 'Unknown')})")
+                            if len(sample_docs) > 5:
+                                st.write(f"... and {len(sample_docs) - 5} more documents")
+                        else:
+                            st.warning("⚠️ No documents found in enhanced store")
+                    
+                    # Test 3: Test specific search
+                    with st.expander("🔍 Test Specific Search", expanded=False):
+                        test_query = st.text_input("Test search query:", placeholder="e.g., Four Seasons, competition, strategy")
+                        if st.button("Search") and test_query:
+                            search_results = vector_store.similarity_search(test_query, k=5)
+                            st.write(f"Found {len(search_results)} results for '{test_query}':")
+                            for i, doc in enumerate(search_results):
+                                metadata = doc.metadata
+                                st.write(f"**Result {i+1}:** {metadata.get('title', 'Unknown')} by {metadata.get('author', 'Unknown')}")
+                                st.write(f"Content preview: {doc.page_content[:200]}...")
+                                st.write("---")
+                    
                 except Exception as e:
                     st.error(f"❌ Vector store error: {e}")
                     if "does not exist" in str(e).lower():
                         st.info("💡 The documents table doesn't exist. Please run the SQL setup script or upload some documents.")
+                    else:
+                        st.info("💡 Check your Supabase connection and table structure.")
         
         if st.button("🧪 Test Feedback System"):
             success = feedback_handler.store_feedback(
@@ -834,12 +970,12 @@ with tab3:
                 st.error("Could not extract text from PDF")
                 return False
             
-            # Create document metadata
+            # Create document metadata with proper field mapping
             metadata = {
                 "title": title,
                 "author": author,
                 "summary": summary,
-                "type": doc_type,
+                "type": doc_type,  # This will be mapped to "doc_type" in enhanced store
                 "genre": genre,
                 "topic": topic,
                 "tags": tags,
@@ -847,6 +983,8 @@ with tab3:
                 "source_type": "PDF",
                 "source": f"PDF: {file.name}"
             }
+            
+            print(f"📊 Debug - Creating document with metadata: {metadata}")
             
             # Choose text splitter based on user selection
             if splitter_type == "Recursive Character":
@@ -869,14 +1007,21 @@ with tab3:
             # Split into chunks
             chunks = text_splitter.split_documents([doc])
             
+            print(f"📊 Debug - Created {len(chunks)} chunks, first chunk metadata: {chunks[0].metadata if chunks else 'No chunks'}")
+            
             # Add to vector store (Supabase)
             with st.spinner(f"Embedding {len(chunks)} chunks..."):
                 vector_store.add_documents(chunks)
             
-            # Add to document tracker CSV
-            file_content = file.read()
-            file.seek(0)
+            # Get file content for tracker (use session state if available)
+            file_key = f"file_content_{file.name.replace('.', '_')}"
+            if file_key in st.session_state:
+                file_content = st.session_state[file_key]
+            else:
+                file.seek(0)
+                file_content = file.read()
             
+            # Add to document tracker CSV
             doc_id = document_tracker.add_document_record(
                 title=title,
                 author=author,
@@ -919,6 +1064,8 @@ with tab3:
                 
         except Exception as e:
             st.error(f"Error processing document: {e}")
+            import traceback
+            st.error(f"Traceback: {traceback.format_exc()}")
             return False
 
     with upload_tab1:
@@ -938,13 +1085,25 @@ with tab3:
                 # Create a unique key for each file
                 file_key = f"file_{i}_{file.name.replace('.', '_')}"
                 
-                # Check for duplicates first
-                file_content = file.read()
-                file.seek(0)  # Reset file pointer
+                # Store file content in session state to avoid multiple reads
+                if f"file_content_{file_key}" not in st.session_state:
+                    file_content = file.read()
+                    file.seek(0)  # Reset file pointer
+                    st.session_state[f"file_content_{file_key}"] = file_content
+                else:
+                    file_content = st.session_state[f"file_content_{file_key}"]
                 
-                is_duplicate, existing_record = document_tracker.is_duplicate_file(file_content, file.name)
+                # Check for duplicates only if not already checked
+                if f"duplicate_checked_{file_key}" not in st.session_state:
+                    is_duplicate, existing_record = document_tracker.is_duplicate_file(file_content, file.name)
+                    st.session_state[f"duplicate_checked_{file_key}"] = True
+                    st.session_state[f"is_duplicate_{file_key}"] = is_duplicate
+                    st.session_state[f"existing_record_{file_key}"] = existing_record
+                else:
+                    is_duplicate = st.session_state[f"is_duplicate_{file_key}"]
+                    existing_record = st.session_state[f"existing_record_{file_key}"]
                 
-                if is_duplicate:
+                if is_duplicate and f"override_{file_key}" not in st.session_state:
                     st.error(f"🚫 Duplicate file detected: {file.name}")
                     st.info(f"This file was already uploaded on {existing_record.get('upload_date', 'Unknown date')}")
                     
@@ -958,8 +1117,9 @@ with tab3:
                         })
                     
                     if st.button(f"🔄 Upload Anyway (Override)", key=f"override_{file_key}"):
+                        st.session_state[f"override_{file_key}"] = True
                         st.warning("Proceeding with duplicate upload...")
-                        # Continue with normal upload process
+                        st.rerun()
                     else:
                         continue  # Skip this file
                 
@@ -1129,10 +1289,10 @@ with tab3:
                                         )
                                         if success:
                                             st.success(f"🎉 Successfully processed {title}!")
-                                            # Clear the metadata from session state
-                                            for key in list(st.session_state.keys()):
-                                                if file_key in key:
-                                                    del st.session_state[key]
+                                            # Clear all session state related to this file
+                                            keys_to_remove = [key for key in st.session_state.keys() if file_key in key]
+                                            for key in keys_to_remove:
+                                                del st.session_state[key]
                                             st.rerun()
                                 else:
                                     st.form_submit_button("✅ Upload to Supabase", type="primary", disabled=True, help="Preview chunks first")
@@ -1336,10 +1496,10 @@ with tab3:
                                     )
                                     if success:
                                         st.success(f"🎉 Successfully processed {title}!")
-                                        # Clear the metadata from session state
-                                        for key in list(st.session_state.keys()):
-                                            if video_id in key:
-                                                del st.session_state[key]
+                                        # Clear all session state related to this file
+                                        keys_to_remove = [key for key in st.session_state.keys() if f"youtube_{video_id}" in key]
+                                        for key in keys_to_remove:
+                                            del st.session_state[key]
                                         st.rerun()
                             
                             with col2:

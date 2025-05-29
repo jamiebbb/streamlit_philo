@@ -452,9 +452,10 @@ CREATE TABLE IF NOT EXISTS documents_enhanced (
         
         if st.button("🧪 Test Metadata Columns"):
             try:
+                import uuid
                 # Test if we can insert a simple document with metadata columns
                 test_data = {
-                    "id": "test-metadata-123",
+                    "id": str(uuid.uuid4()),  # Generate proper UUID
                     "content": "This is a test document to verify metadata columns work.",
                     "metadata": {"test": "data"},
                     "embedding": [0.1] * 1536,  # Dummy embedding
@@ -483,7 +484,7 @@ CREATE TABLE IF NOT EXISTS documents_enhanced (
                     })
                     
                     # Clean up test data
-                    supabase.table("documents_enhanced").delete().eq("id", "test-metadata-123").execute()
+                    supabase.table("documents_enhanced").delete().eq("id", test_data["id"]).execute()
                     st.info("Test data cleaned up")
                 else:
                     st.error("❌ No data returned from insert")
@@ -494,6 +495,65 @@ CREATE TABLE IF NOT EXISTS documents_enhanced (
                     st.info("💡 This suggests some columns don't exist in your Supabase table. Please run the enhanced table setup SQL script.")
                 elif "does not exist" in str(e).lower():
                     st.info("💡 The documents_enhanced table doesn't exist. Please run the setup SQL script first.")
+                else:
+                    st.info("💡 Check the error details above for specific issues.")
+        
+        if st.button("🔍 Debug Vector Store"):
+            try:
+                st.info(f"Vector Store Type: {type(vector_store).__name__}")
+                st.info(f"Table Name: {getattr(vector_store, 'table_name', 'Unknown')}")
+                st.info(f"Has Enhanced Methods: {hasattr(vector_store, '_add_documents_enhanced')}")
+                
+                # Test document creation
+                from langchain_core.documents import Document
+                test_doc = Document(
+                    page_content="Test content for debugging",
+                    metadata={
+                        "title": "Debug Test",
+                        "author": "Debug Author",
+                        "type": "Debug",
+                        "genre": "Testing",
+                        "topic": "Debug",
+                        "difficulty": "Beginner",
+                        "tags": "debug, test",
+                        "source_type": "Debug",
+                        "summary": "Debug summary"
+                    }
+                )
+                
+                st.info("Testing document upload with debug metadata...")
+                
+                # Try to add the document
+                doc_ids = vector_store.add_documents([test_doc])
+                
+                if doc_ids:
+                    st.success(f"✅ Document added with ID: {doc_ids[0]}")
+                    
+                    # Check what was actually inserted
+                    result = supabase.table("documents_enhanced").select("*").eq("id", doc_ids[0]).execute()
+                    if result.data:
+                        inserted_doc = result.data[0]
+                        st.json({
+                            "id": inserted_doc.get("id"),
+                            "title": inserted_doc.get("title"),
+                            "author": inserted_doc.get("author"),
+                            "doc_type": inserted_doc.get("doc_type"),
+                            "genre": inserted_doc.get("genre"),
+                            "metadata_json": inserted_doc.get("metadata")
+                        })
+                        
+                        # Clean up
+                        supabase.table("documents_enhanced").delete().eq("id", doc_ids[0]).execute()
+                        st.info("Debug document cleaned up")
+                    else:
+                        st.warning("Document ID returned but not found in database")
+                else:
+                    st.error("❌ No document IDs returned")
+                    
+            except Exception as e:
+                st.error(f"❌ Debug test failed: {e}")
+                import traceback
+                st.code(traceback.format_exc())
 
     # initialize chat history
     if "messages" not in st.session_state:
@@ -1161,11 +1221,22 @@ with tab3:
                             "Upload Date": existing_record.get('upload_date', 'Unknown')
                         })
                     
-                    if st.button(f"🔄 Upload Anyway (Override)", key=f"override_{file_key}"):
-                        st.session_state[f"override_{file_key}"] = True
-                        st.warning("Proceeding with duplicate upload...")
-                        st.rerun()
-                    else:
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if st.button(f"🔄 Upload Anyway (Override)", key=f"override_{file_key}"):
+                            st.session_state[f"override_{file_key}"] = True
+                            st.warning("Proceeding with duplicate upload...")
+                            st.rerun()
+                    with col2:
+                        if st.button(f"🗑️ Clear Duplicate Check", key=f"clear_dup_{file_key}"):
+                            # Clear all duplicate-related session state for this file
+                            keys_to_clear = [key for key in st.session_state.keys() if file_key in key or file.name.replace('.', '_') in key]
+                            for key in keys_to_clear:
+                                del st.session_state[key]
+                            st.info("Duplicate check cleared. Please try again.")
+                            st.rerun()
+                    
+                    if not st.session_state.get(f"override_{file_key}", False):
                         continue  # Skip this file
                 
                 # Show document title and generate metadata button

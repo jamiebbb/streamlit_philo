@@ -71,19 +71,32 @@ class EnhancedSupabaseVectorStore(SupabaseVectorStore):
         Returns:
             List of document IDs
         """
+        print(f"📊 Debug - add_documents called with table_name: {self.table_name}")
+        print(f"📊 Debug - Number of documents: {len(documents)}")
+        
         try:
             # For enhanced table, we'll insert directly with all columns populated
             if self.table_name == "documents_enhanced":
+                print("📊 Debug - Using enhanced method for documents_enhanced table")
                 return self._add_documents_enhanced(documents, **kwargs)
             else:
+                print("📊 Debug - Using standard method with column updates")
                 # For standard table, use the parent method and update columns
                 doc_ids = super().add_documents(documents, **kwargs)
                 self._update_dedicated_columns(documents, doc_ids)
                 return doc_ids
         except Exception as e:
-            print(f"Error in add_documents: {e}")
-            # Fallback to standard method
-            return super().add_documents(documents, **kwargs)
+            print(f"❌ Error in add_documents: {e}")
+            print(f"📊 Debug - Exception type: {type(e).__name__}")
+            
+            # For enhanced table, don't fall back - we want to see the error
+            if self.table_name == "documents_enhanced":
+                print("❌ Enhanced table insert failed - not falling back to preserve error visibility")
+                raise e
+            else:
+                print("⚠️ Falling back to standard method")
+                # Fallback to standard method
+                return super().add_documents(documents, **kwargs)
     
     def _add_documents_enhanced(self, documents: List[Document], **kwargs) -> List[str]:
         """

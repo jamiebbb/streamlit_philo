@@ -38,6 +38,9 @@ from document_tracker import document_tracker
 load_dotenv()  
 print("DEBUG - OpenAI API Key:", os.environ.get("OPENAI_API_KEY")[:10] + "..." if os.environ.get("OPENAI_API_KEY") else "NOT FOUND")
 
+# Always use enhanced vector store
+USE_ENHANCED_STORE = True
+
 # initiating supabase
 supabase_url = os.environ.get("SUPABASE_URL")
 supabase_key = os.environ.get("SUPABASE_SERVICE_KEY")
@@ -619,21 +622,20 @@ with tab2:
             st.dataframe(display_data, use_container_width=True)
             
             # Add filtering options for CSV/standard view
-            if not (USE_ENHANCED_STORE and hasattr(vector_store, 'get_document_stats')):
-                st.subheader("Filter Documents")
-                
-                # Filter by type
-                all_types = list(set([item["Type"] for item in display_data]))
-                selected_type = st.selectbox("Filter by Type", ["All"] + all_types)
-                
-                # Apply filters
-                filtered_data = display_data
-                if selected_type != "All":
-                    filtered_data = [item for item in filtered_data if item["Type"] == selected_type]
-                
-                if filtered_data != display_data:
-                    st.subheader("Filtered Results")
-                    st.dataframe(filtered_data, use_container_width=True)
+            st.subheader("Filter Documents")
+            
+            # Filter by type
+            all_types = list(set([item["Type"] for item in display_data]))
+            selected_type = st.selectbox("Filter by Type", ["All"] + all_types)
+            
+            # Apply filters
+            filtered_data = display_data
+            if selected_type != "All":
+                filtered_data = [item for item in filtered_data if item["Type"] == selected_type]
+            
+            if filtered_data != display_data:
+                st.subheader("Filtered Results")
+                st.dataframe(filtered_data, use_container_width=True)
         else:
             st.info("No documents found.")
                 
@@ -684,6 +686,77 @@ with tab3:
         except Exception as e:
             st.error(f"Error updating CSV: {e}")
             return False
+
+    def get_document_chunk_count(title):
+        """Get the number of chunks for a document in Supabase."""
+        try:
+            result = supabase.table("documents_enhanced").select("id").eq("title", title).execute()
+            return len(result.data) if result.data else 0
+        except Exception as e:
+            st.error(f"Error getting chunk count: {e}")
+            return 0
+
+    def delete_document_from_supabase(title):
+        """Delete all chunks of a document from Supabase."""
+        try:
+            # First, check how many chunks exist
+            chunk_count = get_document_chunk_count(title)
+            
+            if chunk_count > 0:
+                # Delete all chunks with this title
+                result = supabase.table("documents_enhanced").delete().eq("title", title).execute()
+                return True, chunk_count
+            else:
+                return True, 0  # No chunks to delete, but operation successful
+        except Exception as e:
+            st.error(f"Error deleting from Supabase: {e}")
+            return False, 0
+
+    def update_document_metadata_in_supabase(old_title, new_metadata):
+        """Update all chunks of a document in Supabase with new metadata."""
+        try:
+            # First, check how many chunks exist
+            chunk_count = get_document_chunk_count(old_title)
+            
+            if chunk_count > 0:
+                # Prepare update data for dedicated columns
+                update_data = {
+                    "title": new_metadata["title"],
+                    "author": new_metadata["author"],
+                    "doc_type": new_metadata["type"],
+                    "genre": new_metadata["genre"],
+                    "topic": new_metadata["topic"],
+                    "difficulty": new_metadata["difficulty"],
+                    "tags": new_metadata["tags"],
+                    "source_type": new_metadata["source_type"],
+                    "summary": new_metadata["summary"]
+                }
+                
+                # Prepare JSON metadata for compatibility
+                json_metadata = {
+                    "title": new_metadata["title"],
+                    "author": new_metadata["author"],
+                    "type": new_metadata["type"],
+                    "genre": new_metadata["genre"],
+                    "topic": new_metadata["topic"],
+                    "difficulty": new_metadata["difficulty"],
+                    "tags": new_metadata["tags"],
+                    "source_type": new_metadata["source_type"],
+                    "summary": new_metadata["summary"]
+                }
+                
+                # Update dedicated columns
+                result1 = supabase.table("documents_enhanced").update(update_data).eq("title", old_title).execute()
+                
+                # Update JSON metadata (use new title in case title changed)
+                result2 = supabase.table("documents_enhanced").update({"metadata": json_metadata}).eq("title", new_metadata["title"]).execute()
+                
+                return True, chunk_count
+            else:
+                return True, 0  # No chunks to update, but operation successful
+        except Exception as e:
+            st.error(f"Error updating Supabase metadata: {e}")
+            return False, 0
 
     def preview_pdf_chunks(file, chunk_size, chunk_overlap, splitter_type):
         """Preview the first and last chunks of a PDF document."""
@@ -1349,6 +1422,21 @@ with tab3:
                 # Get the selected document
                 selected_doc = all_docs[all_docs['title'] == selected_title].iloc[0]
                 
+                # Show chunk information
+                csv_chunks = selected_doc.get('chunks', 0)
+                supabase_chunks = get_document_chunk_count(selected_title)
+                
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("CSV Chunks", csv_chunks)
+                with col2:
+                    st.metric("Supabase Chunks", supabase_chunks)
+                with col3:
+                    if csv_chunks == supabase_chunks:
+                        st.success("✅ Synced")
+                    else:
+                        st.warning("⚠️ Out of sync")
+                
                 with st.form("edit_document_form"):
                     st.subheader(f"Editing: {selected_title}")
                     
@@ -1397,24 +1485,8 @@ with tab3:
                                 
                                 # Also update the enhanced Supabase table
                                 try:
-                                    # Update all chunks with this title in Supabase
-                                    update_data = {
-                                        "title": new_title,
-                                        "author": new_author,
-                                        "doc_type": new_type,
-                                        "genre": new_genre,
-                                        "topic": new_topic,
-                                        "difficulty": new_difficulty,
-                                        "tags": new_tags,
-                                        "source_type": new_source_type,
-                                        "summary": new_summary
-                                    }
-                                    
-                                    # Update in Supabase enhanced table
-                                    result = supabase.table("documents_enhanced").update(update_data).eq("title", selected_title).execute()
-                                    
-                                    # Also update JSON metadata for compatibility
-                                    json_metadata = {
+                                    # Prepare new metadata
+                                    new_metadata = {
                                         "title": new_title,
                                         "author": new_author,
                                         "type": new_type,
@@ -1426,14 +1498,25 @@ with tab3:
                                         "summary": new_summary
                                     }
                                     
-                                    # Update JSON metadata in enhanced table
-                                    supabase.table("documents_enhanced").update({"metadata": json_metadata}).eq("title", selected_title).execute()
+                                    # Update all chunks in Supabase
+                                    supabase_success, chunk_count = update_document_metadata_in_supabase(selected_title, new_metadata)
                                     
-                                    st.success("✅ Document updated in both CSV and Supabase!")
+                                    if supabase_success:
+                                        if chunk_count > 0:
+                                            st.success(f"✅ Document updated in CSV and {chunk_count} chunks updated in Supabase!")
+                                            
+                                            # If title changed, show additional info
+                                            if selected_title != new_title:
+                                                st.info(f"📝 Title changed from '{selected_title}' to '{new_title}' across all chunks")
+                                        else:
+                                            st.success("✅ Document updated in CSV! (No chunks found in Supabase to update)")
+                                    else:
+                                        st.warning("⚠️ CSV updated but Supabase update failed")
+                                        st.info("Use 'Sync to Supabase' button to retry Supabase update.")
                                     
                                 except Exception as e:
                                     st.warning(f"⚠️ CSV updated but Supabase update failed: {e}")
-                                    st.info("Document metadata updated in CSV. Supabase sync may be needed.")
+                                    st.info("Document metadata updated in CSV. Use 'Sync to Supabase' button to retry Supabase update.")
                                 
                                 st.rerun()
                                 
@@ -1448,47 +1531,61 @@ with tab3:
                                 success = document_tracker.remove_document(doc_id)
                                 
                                 if success:
-                                    # Also remove from Supabase if using enhanced store
-                                    if USE_ENHANCED_STORE:
-                                        try:
-                                            supabase.table("documents_enhanced").delete().eq("title", selected_title).execute()
-                                            st.success("✅ Document deleted from both CSV and Supabase!")
-                                        except Exception as e:
-                                            st.warning(f"⚠️ Deleted from CSV but Supabase deletion failed: {e}")
+                                    # Also remove ALL chunks from Supabase enhanced store
+                                    supabase_success, chunk_count = delete_document_from_supabase(selected_title)
+                                    
+                                    if supabase_success:
+                                        if chunk_count > 0:
+                                            st.success(f"✅ Document deleted from CSV and {chunk_count} chunks deleted from Supabase!")
+                                        else:
+                                            st.success("✅ Document deleted from CSV! (No chunks found in Supabase)")
                                     else:
-                                        st.success("✅ Document deleted from CSV!")
+                                        st.warning(f"⚠️ Deleted from CSV but Supabase deletion failed")
+                                        st.info("💡 You may need to manually delete the chunks from Supabase")
                                     
                                     st.rerun()
                                 else:
-                                    st.error("❌ Failed to delete document")
+                                    st.error("❌ Failed to delete document from CSV")
                                     
                             except Exception as e:
                                 st.error(f"❌ Error deleting document: {e}")
                     
                     with col3:
                         if st.form_submit_button("🔄 Sync to Supabase", type="secondary"):
-                            if USE_ENHANCED_STORE:
-                                try:
-                                    # Force sync this document to Supabase
-                                    update_data = {
-                                        "title": new_title,
-                                        "author": new_author,
-                                        "doc_type": new_type,
-                                        "genre": new_genre,
-                                        "topic": new_topic,
-                                        "difficulty": new_difficulty,
-                                        "tags": new_tags,
-                                        "source_type": new_source_type,
-                                        "summary": new_summary
-                                    }
-                                    
-                                    result = supabase.table("documents_enhanced").update(update_data).eq("title", selected_title).execute()
-                                    st.success("✅ Document synced to Supabase!")
-                                    
-                                except Exception as e:
-                                    st.error(f"❌ Sync failed: {e}")
-                            else:
-                                st.info("ℹ️ Sync only available with Enhanced Vector Store")
+                            try:
+                                # Prepare metadata for sync
+                                sync_metadata = {
+                                    "title": new_title,
+                                    "author": new_author,
+                                    "type": new_type,
+                                    "genre": new_genre,
+                                    "topic": new_topic,
+                                    "difficulty": new_difficulty,
+                                    "tags": new_tags,
+                                    "source_type": new_source_type,
+                                    "summary": new_summary
+                                }
+                                
+                                # Use helper function to update metadata
+                                supabase_success, chunk_count = update_document_metadata_in_supabase(selected_title, sync_metadata)
+                                
+                                if supabase_success:
+                                    if chunk_count > 0:
+                                        st.success(f"✅ {chunk_count} chunks synced to Supabase!")
+                                        
+                                        # If title changed, show additional info
+                                        if selected_title != new_title:
+                                            st.info(f"📝 Title updated from '{selected_title}' to '{new_title}' across all chunks")
+                                    else:
+                                        st.warning("⚠️ No chunks found in Supabase for this document")
+                                        st.info("💡 The document may not have been uploaded to Supabase yet")
+                                else:
+                                    st.error("❌ Sync failed")
+                                    st.info("💡 Check your Supabase connection and table structure")
+                                
+                            except Exception as e:
+                                st.error(f"❌ Sync failed: {e}")
+                                st.info("💡 Check your Supabase connection and table structure")
         else:
             st.info("No documents available for editing. Upload some documents first!")
         
@@ -1586,75 +1683,40 @@ with tab3:
             if st.button("🔄 Sync from Supabase"):
                 try:
                     with st.spinner("Syncing from Supabase..."):
-                        table_name = "documents_enhanced" if USE_ENHANCED_STORE else "documents"
+                        table_name = "documents_enhanced"
                         
-                        if USE_ENHANCED_STORE:
-                            result = supabase.table(table_name).select("title, author, doc_type, genre, difficulty, source_type, tags, summary").execute()
-                        else:
-                            result = supabase.table(table_name).select("id, metadata").limit(50000).execute()
+                        result = supabase.table(table_name).select("title, author, doc_type, genre, difficulty, source_type, tags, summary").execute()
                         
                         documents = result.data
                         
                         if documents:
-                            if USE_ENHANCED_STORE:
-                                # Count chunks by title for enhanced store
-                                title_counts = {}
-                                doc_by_title = {}
-                                
-                                for doc in documents:
-                                    title = doc.get("title", "Unknown")
-                                    if title not in title_counts:
-                                        title_counts[title] = 0
-                                        doc_by_title[title] = doc
-                                    title_counts[title] += 1
-                                
-                                # Create DataFrame
-                                data = []
-                                for title, count in title_counts.items():
-                                    doc = doc_by_title[title]
-                                    data.append({
-                                        "title": title,
-                                        "chunks": count,
-                                        "author": doc.get("author", "Unknown"),
-                                        "summary": doc.get("summary", ""),
-                                        "type": doc.get("doc_type", "Unknown"),
-                                        "genre": doc.get("genre", "Unknown"),
-                                        "topic": doc.get("topic", "Unknown"),
-                                        "difficulty": doc.get("difficulty", "Unknown"),
-                                        "source_type": doc.get("source_type", "Unknown"),
-                                        "tags": doc.get("tags", "Unknown")
-                                    })
-                            else:
-                                # Process standard store with JSON metadata
-                                title_counts = {}
-                                metadata_by_title = {}
-                                
-                                for doc in documents:
-                                    metadata = doc.get("metadata", {})
-                                    title = metadata.get("title", "Unknown")
-                                    
-                                    if title not in title_counts:
-                                        title_counts[title] = 0
-                                        metadata_by_title[title] = metadata
-                                    
-                                    title_counts[title] += 1
-                                
-                                # Create DataFrame
-                                data = []
-                                for title, count in title_counts.items():
-                                    metadata = metadata_by_title[title]
-                                    data.append({
-                                        "title": title,
-                                        "chunks": count,
-                                        "author": metadata.get("author", "Unknown"),
-                                        "summary": metadata.get("summary", ""),
-                                        "type": metadata.get("type", "Unknown"),
-                                        "genre": metadata.get("genre", "Unknown"),
-                                        "topic": metadata.get("topic", "Unknown"),
-                                        "difficulty": metadata.get("difficulty", "Unknown"),
-                                        "source_type": metadata.get("source_type", "Unknown"),
-                                        "tags": metadata.get("tags", "Unknown")
-                                    })
+                            # Count chunks by title for enhanced store
+                            title_counts = {}
+                            doc_by_title = {}
+                            
+                            for doc in documents:
+                                title = doc.get("title", "Unknown")
+                                if title not in title_counts:
+                                    title_counts[title] = 0
+                                    doc_by_title[title] = doc
+                                title_counts[title] += 1
+                            
+                            # Create DataFrame
+                            data = []
+                            for title, count in title_counts.items():
+                                doc = doc_by_title[title]
+                                data.append({
+                                    "title": title,
+                                    "chunks": count,
+                                    "author": doc.get("author", "Unknown"),
+                                    "summary": doc.get("summary", ""),
+                                    "type": doc.get("doc_type", "Unknown"),
+                                    "genre": doc.get("genre", "Unknown"),
+                                    "topic": doc.get("topic", "Unknown"),
+                                    "difficulty": doc.get("difficulty", "Unknown"),
+                                    "source_type": doc.get("source_type", "Unknown"),
+                                    "tags": doc.get("tags", "Unknown")
+                                })
                             
                             df = pd.DataFrame(data)
                             df.to_csv("documents_metadata.csv", index=False)

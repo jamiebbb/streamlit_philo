@@ -71,13 +71,77 @@ class EnhancedSupabaseVectorStore(SupabaseVectorStore):
         Returns:
             List of document IDs
         """
-        # First, add documents using the standard LangChain method
-        doc_ids = super().add_documents(documents, **kwargs)
+        try:
+            # For enhanced table, we'll insert directly with all columns populated
+            if self.table_name == "documents_enhanced":
+                return self._add_documents_enhanced(documents, **kwargs)
+            else:
+                # For standard table, use the parent method and update columns
+                doc_ids = super().add_documents(documents, **kwargs)
+                self._update_dedicated_columns(documents, doc_ids)
+                return doc_ids
+        except Exception as e:
+            print(f"Error in add_documents: {e}")
+            # Fallback to standard method
+            return super().add_documents(documents, **kwargs)
+    
+    def _add_documents_enhanced(self, documents: List[Document], **kwargs) -> List[str]:
+        """
+        Add documents directly to the enhanced table with all columns populated.
         
-        # Then update the dedicated columns for better performance
-        self._update_dedicated_columns(documents, doc_ids)
+        Args:
+            documents: List of Document objects to add
+            **kwargs: Additional arguments
+            
+        Returns:
+            List of document IDs
+        """
+        from langchain_openai import OpenAIEmbeddings
         
-        return doc_ids
+        doc_ids = []
+        
+        try:
+            # Get embeddings for all documents
+            texts = [doc.page_content for doc in documents]
+            embeddings = self.embedding.embed_documents(texts)
+            
+            for doc, embedding in zip(documents, embeddings):
+                # Generate unique ID
+                doc_id = str(uuid.uuid4())
+                doc_ids.append(doc_id)
+                
+                metadata = doc.metadata
+                
+                # Prepare data for insertion with all columns
+                insert_data = {
+                    "id": doc_id,
+                    "content": doc.page_content,
+                    "metadata": metadata,  # Keep JSON metadata for compatibility
+                    "embedding": embedding,
+                    # Dedicated columns with proper mapping
+                    "title": metadata.get("title", "Unknown"),
+                    "author": metadata.get("author", "Unknown"),
+                    "doc_type": metadata.get("type", "Unknown"),  # Map "type" to "doc_type"
+                    "genre": metadata.get("genre", "Unknown"),
+                    "topic": metadata.get("topic", "Unknown"),
+                    "difficulty": metadata.get("difficulty", "Unknown"),
+                    "tags": metadata.get("tags", ""),
+                    "source_type": metadata.get("source_type", "Unknown"),
+                    "summary": metadata.get("summary", "")
+                }
+                
+                # Insert into enhanced table
+                result = self.client.table(self.table_name).insert(insert_data).execute()
+                
+                if not result.data:
+                    print(f"Warning: No data returned for document {doc_id}")
+            
+            print(f"✅ Successfully added {len(documents)} documents to enhanced table")
+            return doc_ids
+            
+        except Exception as e:
+            print(f"❌ Error adding documents to enhanced table: {e}")
+            raise e
     
     def _update_dedicated_columns(self, documents: List[Document], doc_ids: List[str]):
         """
@@ -91,11 +155,11 @@ class EnhancedSupabaseVectorStore(SupabaseVectorStore):
             for doc, doc_id in zip(documents, doc_ids):
                 metadata = doc.metadata
                 
-                # Extract metadata fields with defaults
+                # Extract metadata fields with defaults and proper mapping
                 update_data = {
                     "title": metadata.get("title", "Unknown"),
                     "author": metadata.get("author", "Unknown"),
-                    "doc_type": metadata.get("type", "Unknown"),
+                    "doc_type": metadata.get("type", "Unknown"),  # Map "type" to "doc_type"
                     "genre": metadata.get("genre", "Unknown"),
                     "topic": metadata.get("topic", "Unknown"),
                     "difficulty": metadata.get("difficulty", "Unknown"),

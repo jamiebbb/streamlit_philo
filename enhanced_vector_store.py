@@ -109,14 +109,22 @@ class EnhancedSupabaseVectorStore(SupabaseVectorStore):
         Returns:
             List of document IDs
         """
-        from langchain_openai import OpenAIEmbeddings
-        
         doc_ids = []
         
         try:
             # Get embeddings for all documents
             texts = [doc.page_content for doc in documents]
-            embeddings = self.embedding.embed_documents(texts)
+            
+            # Use the correct embedding attribute from parent class
+            # Check for both possible attribute names
+            if hasattr(self, '_embedding'):
+                embedding_model = self._embedding
+            elif hasattr(self, 'embedding'):
+                embedding_model = self.embedding
+            else:
+                raise AttributeError("No embedding model found. Expected '_embedding' or 'embedding' attribute.")
+            
+            embeddings = embedding_model.embed_documents(texts)
             
             for doc, embedding in zip(documents, embeddings):
                 # Generate unique ID

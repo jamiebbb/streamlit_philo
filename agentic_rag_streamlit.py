@@ -6,6 +6,9 @@ from dotenv import load_dotenv
 # import streamlit
 import streamlit as st
 
+# MUST BE FIRST STREAMLIT COMMAND
+st.set_page_config(page_title="Agentic RAG Chatbot", page_icon="🦜")
+
 # import langchain
 from langchain.agents import AgentExecutor
 from langchain_openai import ChatOpenAI
@@ -50,35 +53,23 @@ feedback_handler.test_supabase_connection()
 # initiating embeddings model
 embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
 
-# Configuration for vector store
-USE_ENHANCED_STORE = st.sidebar.checkbox("🚀 Use Enhanced Vector Store", value=True, help="Use the new enhanced table with dedicated metadata columns for better performance")
-
-# initiating vector store based on configuration
-if USE_ENHANCED_STORE:
-    try:
-        vector_store = create_enhanced_vector_store(
-            supabase_client=supabase,
-            embeddings=embeddings,
-            table_name="documents_enhanced"
-        )
-        st.sidebar.success("✅ Using Enhanced Vector Store")
-    except Exception as e:
-        st.sidebar.error(f"❌ Enhanced store failed: {e}")
-        st.sidebar.info("Falling back to standard vector store")
-        vector_store = SupabaseVectorStore(
-            embedding=embeddings,
-            client=supabase,
-            table_name="documents",
-            query_name="match_documents",
-        )
-else:
+# Always use enhanced vector store
+try:
+    vector_store = create_enhanced_vector_store(
+        supabase_client=supabase,
+        embeddings=embeddings,
+        table_name="documents_enhanced"
+    )
+    print("✅ Using Enhanced Vector Store")
+except Exception as e:
+    print(f"❌ Enhanced store failed: {e}")
+    print("Falling back to standard vector store")
     vector_store = SupabaseVectorStore(
         embedding=embeddings,
         client=supabase,
         table_name="documents",
         query_name="match_documents",
     )
-    st.sidebar.info("📊 Using Standard Vector Store")
 
 # initiating llm
 llm = ChatOpenAI(model="gpt-4o-mini",temperature=0)
@@ -139,8 +130,7 @@ agent = create_tool_calling_agent(llm, tools, prompt)
 # create the agent executor
 agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=True)
 
-# initiating streamlit app
-st.set_page_config(page_title="Agentic RAG Chatbot", page_icon="🦜")
+# App title
 st.title("🦜 Agentic RAG Chatbot")
 
 # Create tabs
@@ -160,37 +150,36 @@ with tab1:
         
         st.divider()
         
-        # Enhanced Vector Store Setup
-        if USE_ENHANCED_STORE:
-            st.markdown("### 🚀 Enhanced Vector Store")
-            st.markdown("You're using the enhanced vector store with dedicated metadata columns for better performance.")
+        # Enhanced Vector Store Setup - Always shown since we always use it
+        st.markdown("### 🚀 Enhanced Vector Store")
+        st.markdown("Using the enhanced vector store with dedicated metadata columns for better performance.")
+        
+        with st.expander("📋 Setup Instructions", expanded=False):
+            st.markdown("""
+            **To set up the enhanced table:**
             
-            with st.expander("📋 Setup Instructions", expanded=False):
-                st.markdown("""
-                **To set up the enhanced table:**
-                
-                **Option A: Full Setup (Recommended)**
-                1. Run `setup_enhanced_documents_table.sql` in your Supabase SQL editor
-                2. This creates the `documents_enhanced` table with all optimizations
-                
-                **Option B: If you get pg_trgm error**
-                1. Run `setup_enhanced_documents_table_simple.sql` instead
-                2. This version doesn't require the pg_trgm extension
-                3. Performance is still excellent for most use cases
-                
-                **Benefits:**
-                - 100x faster filtered queries
-                - Better performance for large datasets
-                - Advanced filtering capabilities
-                - Maintains LangChain compatibility
-                
-                **Common Issues:**
-                - `gin_trgm_ops does not exist` → Use the simple version
-                - `extension "vector" does not exist` → Enable vector extension in Supabase
-                """)
-                
-                if st.button("📄 Show Full SQL Script"):
-                    st.code("""
+            **Option A: Full Setup (Recommended)**
+            1. Run `setup_enhanced_documents_table.sql` in your Supabase SQL editor
+            2. This creates the `documents_enhanced` table with all optimizations
+            
+            **Option B: If you get pg_trgm error**
+            1. Run `setup_enhanced_documents_table_simple.sql` instead
+            2. This version doesn't require the pg_trgm extension
+            3. Performance is still excellent for most use cases
+            
+            **Benefits:**
+            - 100x faster filtered queries
+            - Better performance for large datasets
+            - Advanced filtering capabilities
+            - Maintains LangChain compatibility
+            
+            **Common Issues:**
+            - `gin_trgm_ops does not exist` → Use the simple version
+            - `extension "vector" does not exist` → Enable vector extension in Supabase
+            """)
+            
+            if st.button("📄 Show Full SQL Script"):
+                st.code("""
 -- Full version (setup_enhanced_documents_table.sql):
 CREATE EXTENSION IF NOT EXISTS vector;
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
@@ -214,10 +203,10 @@ CREATE TABLE IF NOT EXISTS documents_enhanced (
 );
 
 -- See full script files for complete setup
-                    """, language="sql")
-                
-                if st.button("📄 Show Simple SQL Script"):
-                    st.code("""
+                """, language="sql")
+            
+            if st.button("📄 Show Simple SQL Script"):
+                st.code("""
 -- Simple version (setup_enhanced_documents_table_simple.sql):
 CREATE EXTENSION IF NOT EXISTS vector;
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
@@ -241,7 +230,7 @@ CREATE TABLE IF NOT EXISTS documents_enhanced (
 );
 
 -- See setup_enhanced_documents_table_simple.sql for complete script
-                    """, language="sql")
+                """, language="sql")
         
         st.divider()
         st.markdown("### Tips")
@@ -372,8 +361,8 @@ with tab2:
     if st.button("🔄 Refresh Data", key="refresh_vector_store"):
         st.rerun()
     
-    # Show enhanced statistics if using enhanced store
-    if USE_ENHANCED_STORE and hasattr(vector_store, 'get_document_stats'):
+    # Show enhanced statistics - always available since we always use enhanced store
+    if hasattr(vector_store, 'get_document_stats'):
         try:
             st.subheader("📊 Enhanced Statistics")
             stats = vector_store.get_document_stats()
@@ -477,95 +466,71 @@ with tab2:
             total_chunks = df["chunks"].sum() if "chunks" in df.columns else len(df)
             st.success(f"✅ Loaded {len(df)} documents with {total_chunks} total chunks from CSV")
             
+            # Offer to create CSV for future use
+            if st.button("💾 Save to CSV for faster loading"):
+                df_to_save = pd.DataFrame([
+                    {
+                        "title": item["Title"],
+                        "chunks": item["Chunks"],
+                        "author": item["Author"],
+                        "type": item["Type"],
+                        "genre": item["Genre"],
+                        "difficulty": item["Difficulty"],
+                        "source_type": item["Source Type"],
+                        "tags": item["Tags"]
+                    }
+                    for item in display_data
+                ])
+                df_to_save.to_csv(csv_file, index=False)
+                st.success(f"✅ Saved {len(df_to_save)} documents to {csv_file}")
+            
         else:
             st.warning("📄 CSV file not found. Falling back to Supabase query...")
             # Fallback to Supabase if CSV doesn't exist
             with st.spinner("Loading from Supabase..."):
-                table_name = "documents_enhanced" if USE_ENHANCED_STORE else "documents"
+                table_name = "documents_enhanced"
                 
-                if USE_ENHANCED_STORE:
-                    # Use enhanced table with dedicated columns
-                    result = supabase.table(table_name).select(
-                        "id, title, author, doc_type, genre, topic, difficulty, tags, source_type, summary"
-                    ).limit(50000).execute()
-                    documents = result.data
-                    
-                    if not documents:
-                        st.info("No documents found in the enhanced vector store.")
-                        display_data = []
-                        total_chunks = 0
-                    else:
-                        # Count documents by title
-                        title_counts = {}
-                        doc_by_title = {}
-                        
-                        for doc in documents:
-                            title = doc.get("title", "Unknown")
-                            if title not in title_counts:
-                                title_counts[title] = 0
-                                doc_by_title[title] = doc
-                            title_counts[title] += 1
-                        
-                        # Create display data
-                        display_data = []
-                        for title, count in title_counts.items():
-                            doc = doc_by_title[title]
-                            display_data.append({
-                                "Title": title,
-                                "Chunks": count,
-                                "Author": doc.get("author", "Unknown"),
-                                "Summary": str(doc.get("summary", ""))[:100] + "..." if len(str(doc.get("summary", ""))) > 100 else str(doc.get("summary", "")),
-                                "Type": doc.get("doc_type", "Unknown"),
-                                "Genre": doc.get("genre", "Unknown"),
-                                "Topic": doc.get("topic", "Unknown"),
-                                "Difficulty": doc.get("difficulty", "Unknown"),
-                                "Source Type": doc.get("source_type", "Unknown"),
-                                "Tags": str(doc.get("tags", ""))[:50] + "..." if len(str(doc.get("tags", ""))) > 50 else str(doc.get("tags", ""))
-                            })
-                        
-                        total_chunks = len(documents)
-                        st.success(f"📊 Loaded {len(title_counts)} documents with {total_chunks} total chunks from Enhanced Supabase")
+                # Use enhanced table with dedicated columns
+                result = supabase.table(table_name).select(
+                    "id, title, author, doc_type, genre, topic, difficulty, tags, source_type, summary"
+                ).limit(50000).execute()
+                documents = result.data
+                
+                if not documents:
+                    st.info("No documents found in the enhanced vector store.")
+                    display_data = []
+                    total_chunks = 0
                 else:
-                    # Use standard table with JSON metadata
-                    result = supabase.table(table_name).select("id, metadata").limit(50000).execute()
-                    documents = result.data
+                    # Count documents by title
+                    title_counts = {}
+                    doc_by_title = {}
                     
-                    if not documents:
-                        st.info("No documents found in the vector store.")
-                        display_data = []
-                        total_chunks = 0
-                    else:
-                        # Count documents by title and collect metadata
-                        title_counts = {}
-                        metadata_by_title = {}
-                        
-                        for doc in documents:
-                            metadata = doc.get("metadata", {})
-                            title = metadata.get("title", "Unknown")
-                            
-                            if title not in title_counts:
-                                title_counts[title] = 0
-                                metadata_by_title[title] = metadata
-                            
-                            title_counts[title] += 1
-                        
-                        # Create display data
-                        display_data = []
-                        for title, count in title_counts.items():
-                            metadata = metadata_by_title[title]
-                            display_data.append({
-                                "Title": title,
-                                "Chunks": count,
-                                "Author": metadata.get("author", "Unknown"),
-                                "Type": metadata.get("type", "Unknown"),
-                                "Genre": metadata.get("genre", "Unknown"),
-                                "Difficulty": metadata.get("difficulty", "Unknown"),
-                                "Source Type": metadata.get("source_type", "Unknown"),
-                                "Tags": metadata.get("tags", "Unknown")[:50] + "..." if len(str(metadata.get("tags", "Unknown"))) > 50 else metadata.get("tags", "Unknown")
-                            })
-                        
-                        total_chunks = len(documents)
-                        st.success(f"📊 Loaded {len(title_counts)} documents with {total_chunks} total chunks from Standard Supabase")
+                    for doc in documents:
+                        title = doc.get("title", "Unknown")
+                        if title not in title_counts:
+                            title_counts[title] = 0
+                            doc_by_title[title] = doc
+                        title_counts[title] += 1
+                    
+                    # Create display data
+                    display_data = []
+                    for title, count in title_counts.items():
+                        doc = doc_by_title[title]
+                        display_data.append({
+                            "Title": title,
+                            "Chunks": count,
+                            "Author": doc.get("author", "Unknown"),
+                            "Summary": str(doc.get("summary", ""))[:100] + "..." if len(str(doc.get("summary", ""))) > 100 else str(doc.get("summary", "")),
+                            "Type": doc.get("doc_type", "Unknown"),
+                            "Genre": doc.get("genre", "Unknown"),
+                            "Topic": doc.get("topic", "Unknown"),
+                            "Difficulty": doc.get("difficulty", "Unknown"),
+                            "Source Type": doc.get("source_type", "Unknown"),
+                            "Tags": str(doc.get("tags", ""))[:50] + "..." if len(str(doc.get("tags", ""))) > 50 else str(doc.get("tags", ""))
+                        })
+                    
+                    total_chunks = len(documents)
+                    st.success(f"📊 Loaded {len(title_counts)} documents with {total_chunks} total chunks from Enhanced Supabase")
                 
                 # Offer to create CSV for future use
                 if st.button("💾 Save to CSV for faster loading"):
@@ -1242,48 +1207,45 @@ with tab3:
                                 # Save back to CSV
                                 all_docs.to_csv(document_tracker.csv_file, index=False)
                                 
-                                # Also update the enhanced Supabase table if using enhanced store
-                                if USE_ENHANCED_STORE:
-                                    try:
-                                        # Update all chunks with this title in Supabase
-                                        update_data = {
-                                            "title": new_title,
-                                            "author": new_author,
-                                            "doc_type": new_type,
-                                            "genre": new_genre,
-                                            "topic": new_topic,
-                                            "difficulty": new_difficulty,
-                                            "tags": new_tags,
-                                            "source_type": new_source_type,
-                                            "summary": new_summary
-                                        }
-                                        
-                                        # Update in Supabase enhanced table
-                                        result = supabase.table("documents_enhanced").update(update_data).eq("title", selected_title).execute()
-                                        
-                                        # Also update JSON metadata for compatibility
-                                        json_metadata = {
-                                            "title": new_title,
-                                            "author": new_author,
-                                            "type": new_type,
-                                            "genre": new_genre,
-                                            "topic": new_topic,
-                                            "difficulty": new_difficulty,
-                                            "tags": new_tags,
-                                            "source_type": new_source_type,
-                                            "summary": new_summary
-                                        }
-                                        
-                                        # Update JSON metadata in enhanced table
-                                        supabase.table("documents_enhanced").update({"metadata": json_metadata}).eq("title", selected_title).execute()
-                                        
-                                        st.success("✅ Document updated in both CSV and Supabase!")
-                                        
-                                    except Exception as e:
-                                        st.warning(f"⚠️ CSV updated but Supabase update failed: {e}")
-                                        st.info("Document metadata updated in CSV. Supabase sync may be needed.")
-                                else:
-                                    st.success("✅ Document updated in CSV!")
+                                # Also update the enhanced Supabase table
+                                try:
+                                    # Update all chunks with this title in Supabase
+                                    update_data = {
+                                        "title": new_title,
+                                        "author": new_author,
+                                        "doc_type": new_type,
+                                        "genre": new_genre,
+                                        "topic": new_topic,
+                                        "difficulty": new_difficulty,
+                                        "tags": new_tags,
+                                        "source_type": new_source_type,
+                                        "summary": new_summary
+                                    }
+                                    
+                                    # Update in Supabase enhanced table
+                                    result = supabase.table("documents_enhanced").update(update_data).eq("title", selected_title).execute()
+                                    
+                                    # Also update JSON metadata for compatibility
+                                    json_metadata = {
+                                        "title": new_title,
+                                        "author": new_author,
+                                        "type": new_type,
+                                        "genre": new_genre,
+                                        "topic": new_topic,
+                                        "difficulty": new_difficulty,
+                                        "tags": new_tags,
+                                        "source_type": new_source_type,
+                                        "summary": new_summary
+                                    }
+                                    
+                                    # Update JSON metadata in enhanced table
+                                    supabase.table("documents_enhanced").update({"metadata": json_metadata}).eq("title", selected_title).execute()
+                                    
+                                    st.success("✅ Document updated in both CSV and Supabase!")
+                                    
+                                except Exception as e:
+                                    st.warning(f"⚠️ CSV updated but Supabase update failed: {e}")
+                                    st.info("Document metadata updated in CSV. Supabase sync may be needed.")
                                 
                                 st.rerun()
                                 

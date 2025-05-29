@@ -134,18 +134,28 @@ class EnhancedSupabaseVectorStore(SupabaseVectorStore):
                 }
                 
                 # Debug: Print what we're inserting
-                print(f"📊 Debug - Insert data: {insert_data}")
+                print(f"📊 Debug - Insert data keys: {list(insert_data.keys())}")
+                print(f"📊 Debug - Insert data values: title='{insert_data['title']}', author='{insert_data['author']}', doc_type='{insert_data['doc_type']}'")
                 
                 # Insert into enhanced table
-                result = self.client.table(self.table_name).insert(insert_data).execute()
-                
-                # Debug: Print result
-                print(f"📊 Debug - Insert result: {result.data}")
-                
-                if not result.data:
-                    print(f"Warning: No data returned for document {doc_id}")
-                else:
-                    print(f"✅ Successfully inserted document {doc_id} with metadata columns")
+                try:
+                    result = self.client.table(self.table_name).insert(insert_data).execute()
+                    
+                    # Debug: Print result
+                    print(f"📊 Debug - Insert result success: {len(result.data) > 0}")
+                    if result.data:
+                        inserted_doc = result.data[0]
+                        print(f"📊 Debug - Inserted doc columns: title='{inserted_doc.get('title')}', author='{inserted_doc.get('author')}', doc_type='{inserted_doc.get('doc_type')}'")
+                    else:
+                        print(f"⚠️ Warning: No data returned for document {doc_id}")
+                        
+                except Exception as insert_error:
+                    print(f"❌ Insert error: {insert_error}")
+                    # Try to get more details about the error
+                    if "column" in str(insert_error).lower():
+                        print(f"💡 This might be a column mismatch. Check if all columns exist in your Supabase table.")
+                        print(f"💡 Expected columns: {list(insert_data.keys())}")
+                    raise insert_error
             
             print(f"✅ Successfully added {len(documents)} documents to enhanced table")
             return doc_ids

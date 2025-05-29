@@ -449,6 +449,51 @@ CREATE TABLE IF NOT EXISTS documents_enhanced (
                     st.json(result.data[-1])  # Show latest record
             except Exception as e:
                 st.error(f"Error: {e}")
+        
+        if st.button("🧪 Test Metadata Columns"):
+            try:
+                # Test if we can insert a simple document with metadata columns
+                test_data = {
+                    "id": "test-metadata-123",
+                    "content": "This is a test document to verify metadata columns work.",
+                    "metadata": {"test": "data"},
+                    "embedding": [0.1] * 1536,  # Dummy embedding
+                    "title": "Test Document",
+                    "author": "Test Author",
+                    "doc_type": "Test",
+                    "genre": "Test Genre",
+                    "topic": "Testing",
+                    "difficulty": "Beginner",
+                    "tags": "test, metadata",
+                    "source_type": "Test",
+                    "summary": "This is a test summary"
+                }
+                
+                # Try to insert
+                result = supabase.table("documents_enhanced").insert(test_data).execute()
+                
+                if result.data:
+                    st.success("✅ Metadata columns test successful!")
+                    inserted = result.data[0]
+                    st.json({
+                        "title": inserted.get("title"),
+                        "author": inserted.get("author"),
+                        "doc_type": inserted.get("doc_type"),
+                        "genre": inserted.get("genre")
+                    })
+                    
+                    # Clean up test data
+                    supabase.table("documents_enhanced").delete().eq("id", "test-metadata-123").execute()
+                    st.info("Test data cleaned up")
+                else:
+                    st.error("❌ No data returned from insert")
+                    
+            except Exception as e:
+                st.error(f"❌ Metadata columns test failed: {e}")
+                if "column" in str(e).lower():
+                    st.info("💡 This suggests some columns don't exist in your Supabase table. Please run the enhanced table setup SQL script.")
+                elif "does not exist" in str(e).lower():
+                    st.info("💡 The documents_enhanced table doesn't exist. Please run the setup SQL script first.")
 
     # initialize chat history
     if "messages" not in st.session_state:
@@ -1289,10 +1334,17 @@ with tab3:
                                         )
                                         if success:
                                             st.success(f"🎉 Successfully processed {title}!")
-                                            # Clear all session state related to this file
+                                            # Clear all session state related to this file to prevent duplicate detection issues
                                             keys_to_remove = [key for key in st.session_state.keys() if file_key in key]
                                             for key in keys_to_remove:
                                                 del st.session_state[key]
+                                            
+                                            # Also clear any duplicate-related session state
+                                            duplicate_keys = [key for key in st.session_state.keys() if 'duplicate' in key and file.name.replace('.', '_') in key]
+                                            for key in duplicate_keys:
+                                                del st.session_state[key]
+                                            
+                                            st.info("✅ File uploaded successfully. You can now upload the same file again if needed.")
                                             st.rerun()
                                 else:
                                     st.form_submit_button("✅ Upload to Supabase", type="primary", disabled=True, help="Preview chunks first")

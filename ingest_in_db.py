@@ -32,15 +32,12 @@ env_path = Path(__file__).parent / '.env'
 print("Looking for .env file at:", env_path)
 
 # load environment variables
-load_dotenv(dotenv_path=env_path)  
-
-# Force the correct OpenAI API key
-os.environ["OPENAI_API_KEY"] = "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"
+load_dotenv(dotenv_path=env_path, override=True)  
 
 # Debug prints to check environment variables
 print("SUPABASE_URL:", os.environ.get("SUPABASE_URL"))
 print("SUPABASE_SERVICE_KEY:", os.environ.get("SUPABASE_SERVICE_KEY")[:10] + "..." if os.environ.get("SUPABASE_SERVICE_KEY") else None)
-print("OPENAI_API_KEY:", os.environ.get("OPENAI_API_KEY"))
+print("OPENAI_API_KEY:", os.environ.get("OPENAI_API_KEY")[:10] + "..." if os.environ.get("OPENAI_API_KEY") else "NOT FOUND")
 
 # initiate supabase db
 supabase_url = os.environ.get("SUPABASE_URL")

@@ -35,7 +35,7 @@ from enhanced_vector_store import EnhancedSupabaseVectorStore, create_enhanced_v
 from document_tracker import document_tracker
 
 # load environment variables
-load_dotenv()  
+load_dotenv(override=True)  
 print("DEBUG - OpenAI API Key:", os.environ.get("OPENAI_API_KEY")[:10] + "..." if os.environ.get("OPENAI_API_KEY") else "NOT FOUND")
 
 # Always use enhanced vector store

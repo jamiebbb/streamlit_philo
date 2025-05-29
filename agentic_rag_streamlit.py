@@ -634,7 +634,170 @@ with tab3:
         except Exception as e:
             st.error(f"Error updating CSV: {e}")
             return False
-    
+
+    def preview_pdf_chunks(file, chunk_size, chunk_overlap, splitter_type):
+        """Preview the first and last chunks of a PDF document."""
+        try:
+            # Reset file pointer
+            file.seek(0)
+            
+            # Extract text from PDF
+            from pypdf import PdfReader
+            import io
+            from langchain.text_splitter import RecursiveCharacterTextSplitter, CharacterTextSplitter
+            from langchain_core.documents import Document
+            
+            pdf_reader = PdfReader(io.BytesIO(file.read()))
+            full_text = ""
+            
+            # Extract all text
+            for page_num, page in enumerate(pdf_reader.pages):
+                page_text = page.extract_text()
+                full_text += f"\n\n--- Page {page_num + 1} ---\n\n{page_text}"
+            
+            if not full_text.strip():
+                return None, "Could not extract text from PDF"
+            
+            # Choose text splitter based on user selection
+            if splitter_type == "Recursive Character":
+                text_splitter = RecursiveCharacterTextSplitter(
+                    chunk_size=chunk_size,
+                    chunk_overlap=chunk_overlap,
+                    length_function=len,
+                )
+            else:  # Character splitter
+                text_splitter = CharacterTextSplitter(
+                    chunk_size=chunk_size,
+                    chunk_overlap=chunk_overlap,
+                    length_function=len,
+                    separator="\n\n"  # Split on double newlines
+                )
+            
+            # Create document object
+            doc = Document(page_content=full_text, metadata={})
+            
+            # Split into chunks
+            chunks = text_splitter.split_documents([doc])
+            
+            if not chunks:
+                return None, "No chunks were created"
+            
+            return chunks, None
+            
+        except Exception as e:
+            return None, f"Error processing document: {e}"
+
+    def process_pdf_document(file, title, author, summary, doc_type, genre, topic, tags, difficulty, chunk_size, chunk_overlap, splitter_type):
+        """Process PDF document: extract text, chunk, embed, and save to both CSV and Supabase."""
+        try:
+            # Reset file pointer
+            file.seek(0)
+            
+            # Extract text from PDF
+            from pypdf import PdfReader
+            import io
+            from langchain.text_splitter import RecursiveCharacterTextSplitter, CharacterTextSplitter
+            from langchain_core.documents import Document
+            
+            pdf_reader = PdfReader(io.BytesIO(file.read()))
+            full_text = ""
+            
+            # Extract all text
+            for page_num, page in enumerate(pdf_reader.pages):
+                page_text = page.extract_text()
+                full_text += f"\n\n--- Page {page_num + 1} ---\n\n{page_text}"
+            
+            if not full_text.strip():
+                st.error("Could not extract text from PDF")
+                return False
+            
+            # Create document metadata
+            metadata = {
+                "title": title,
+                "author": author,
+                "summary": summary,
+                "type": doc_type,
+                "genre": genre,
+                "topic": topic,
+                "tags": tags,
+                "difficulty": difficulty,
+                "source_type": "PDF",
+                "source": f"PDF: {file.name}"
+            }
+            
+            # Choose text splitter based on user selection
+            if splitter_type == "Recursive Character":
+                text_splitter = RecursiveCharacterTextSplitter(
+                    chunk_size=chunk_size,
+                    chunk_overlap=chunk_overlap,
+                    length_function=len,
+                )
+            else:  # Character splitter
+                text_splitter = CharacterTextSplitter(
+                    chunk_size=chunk_size,
+                    chunk_overlap=chunk_overlap,
+                    length_function=len,
+                    separator="\n\n"  # Split on double newlines
+                )
+            
+            # Create document object
+            doc = Document(page_content=full_text, metadata=metadata)
+            
+            # Split into chunks
+            chunks = text_splitter.split_documents([doc])
+            
+            # Add to vector store (Supabase)
+            with st.spinner(f"Embedding {len(chunks)} chunks..."):
+                vector_store.add_documents(chunks)
+            
+            # Add to document tracker CSV
+            file_content = file.read()
+            file.seek(0)
+            
+            doc_id = document_tracker.add_document_record(
+                title=title,
+                author=author,
+                summary=summary,
+                doc_type=doc_type,
+                genre=genre,
+                topic=topic,
+                difficulty=difficulty,
+                source_type="PDF",
+                tags=tags,
+                chunks=len(chunks),
+                chunk_size=chunk_size,
+                chunk_overlap=chunk_overlap,
+                file_content=file_content,
+                file_name=file.name,
+                file_size=file.size
+            )
+            
+            # Also update the legacy CSV for backward compatibility
+            success = add_document_to_csv(
+                title=title,
+                chunks=len(chunks),
+                author=author,
+                doc_type=doc_type,
+                genre=genre,
+                difficulty=difficulty,
+                source_type="PDF",
+                tags=tags,
+                summary=summary,
+                topic=topic
+            )
+            
+            if doc_id and success:
+                st.success(f"✅ Added {len(chunks)} chunks to vector store and updated tracking systems")
+                st.info(f"📄 A new row has been added to the CSV file: documents_metadata.csv")
+                return True
+            else:
+                st.error("Failed to update tracking systems")
+                return False
+                
+        except Exception as e:
+            st.error(f"Error processing document: {e}")
+            return False
+
     with upload_tab1:
         st.subheader("Upload PDF Documents")
         uploaded_files = st.file_uploader(
@@ -790,14 +953,10 @@ with tab3:
                             with col1:
                                 title = st.text_input("Title", value=metadata.get("title", ""), key=f"form_title_{file_key}")
                                 author = st.text_input("Author", value=metadata.get("author", ""), key=f"author_{file_key}")
-                                doc_type = st.selectbox("Type", 
-                                    ["Book", "Article", "Report", "Paper", "Manual", "Guide", "Other"],
-                                    index=["Book", "Article", "Report", "Paper", "Manual", "Guide", "Other"].index(metadata.get("type", "Other")) if metadata.get("type") in ["Book", "Article", "Report", "Paper", "Manual", "Guide", "Other"] else 6,
-                                    key=f"type_{file_key}")
-                                genre = st.selectbox("Genre", 
-                                    ["Fiction", "Non-fiction", "Technical", "Academic", "Business", "Educational", "Legal", "Medical", "Other"],
-                                    index=["Fiction", "Non-fiction", "Technical", "Academic", "Business", "Educational", "Legal", "Medical", "Other"].index(metadata.get("genre", "Other")) if metadata.get("genre") in ["Fiction", "Non-fiction", "Technical", "Academic", "Business", "Educational", "Legal", "Medical", "Other"] else 8,
-                                    key=f"genre_{file_key}")
+                                doc_type = st.text_input("Type", value=metadata.get("type", ""), key=f"type_{file_key}", 
+                                    help="e.g., Book, Article, Report, Paper, Manual, Guide, etc.")
+                                genre = st.text_input("Genre", value=metadata.get("genre", ""), key=f"genre_{file_key}",
+                                    help="e.g., Fiction, Non-fiction, Technical, Academic, Business, Educational, etc.")
                             
                             with col2:
                                 topic = st.text_input("Topic", value=metadata.get("topic", ""), key=f"topic_{file_key}")
@@ -811,137 +970,118 @@ with tab3:
                             
                             # Chunking parameters
                             st.subheader("Chunking Parameters")
-                            col1, col2 = st.columns(2)
+                            col1, col2, col3 = st.columns(3)
                             with col1:
                                 chunk_size = st.slider("Chunk Size", 500, 5000, 1000, 100, key=f"chunk_size_{file_key}")
                             with col2:
                                 chunk_overlap = st.slider("Chunk Overlap", 50, 500, 100, 25, key=f"chunk_overlap_{file_key}")
+                            with col3:
+                                splitter_type = st.selectbox("Text Splitter", 
+                                    ["Recursive Character", "Character"],
+                                    index=0,
+                                    key=f"splitter_{file_key}",
+                                    help="Recursive Character: Better for most documents. Character: Splits on specific separators.")
                             
-                            col1, col2 = st.columns(2)
+                            # Preview chunks button
+                            col1, col2, col3 = st.columns(3)
                             with col1:
-                                if st.form_submit_button("✅ Upload to Supabase", type="primary"):
-                                    # Process the document
-                                    success = process_pdf_document(
-                                        file, title, author, summary, doc_type, genre, topic, tags, difficulty, chunk_size, chunk_overlap
-                                    )
-                                    if success:
-                                        st.success(f"🎉 Successfully processed {title}!")
-                                        # Clear the metadata from session state
-                                        for key in list(st.session_state.keys()):
-                                            if file_key in key:
-                                                del st.session_state[key]
-                                        st.rerun()
+                                if st.form_submit_button("🔍 Preview Chunks", type="secondary"):
+                                    with st.spinner("Generating chunk preview..."):
+                                        chunks, error = preview_pdf_chunks(file, chunk_size, chunk_overlap, splitter_type)
+                                        if error:
+                                            st.error(f"Error: {error}")
+                                        else:
+                                            # Store chunks in session state for preview
+                                            st.session_state[f"chunks_preview_{file_key}"] = chunks
+                                            st.success(f"✅ Generated {len(chunks)} chunks for preview")
+                                            st.rerun()
                             
                             with col2:
+                                # Only show upload button if chunks have been previewed
+                                if f"chunks_preview_{file_key}" in st.session_state:
+                                    if st.form_submit_button("✅ Upload to Supabase", type="primary"):
+                                        # Process the document
+                                        success = process_pdf_document(
+                                            file, title, author, summary, doc_type, genre, topic, tags, difficulty, chunk_size, chunk_overlap, splitter_type
+                                        )
+                                        if success:
+                                            st.success(f"🎉 Successfully processed {title}!")
+                                            # Clear the metadata from session state
+                                            for key in list(st.session_state.keys()):
+                                                if file_key in key:
+                                                    del st.session_state[key]
+                                            st.rerun()
+                                else:
+                                    st.form_submit_button("✅ Upload to Supabase", type="primary", disabled=True, help="Preview chunks first")
+                            
+                            with col3:
                                 if st.form_submit_button("🗑️ Cancel", type="secondary"):
                                     # Clear the metadata from session state
                                     for key in list(st.session_state.keys()):
                                         if file_key in key:
                                             del st.session_state[key]
                                     st.rerun()
+                        
+                        # Show chunk preview if available
+                        if f"chunks_preview_{file_key}" in st.session_state:
+                            chunks = st.session_state[f"chunks_preview_{file_key}"]
+                            
+                            st.subheader(f"📄 Chunk Preview ({len(chunks)} total chunks)")
+                            
+                            col1, col2 = st.columns(2)
+                            
+                            with col1:
+                                st.markdown("**🟢 First Chunk:**")
+                                with st.expander("View First Chunk", expanded=True):
+                                    st.text_area(
+                                        "First chunk content:",
+                                        value=chunks[0].page_content,
+                                        height=200,
+                                        key=f"first_chunk_{file_key}",
+                                        disabled=True
+                                    )
+                                    st.caption(f"Length: {len(chunks[0].page_content)} characters")
+                            
+                            with col2:
+                                st.markdown("**🔴 Last Chunk:**")
+                                with st.expander("View Last Chunk", expanded=True):
+                                    st.text_area(
+                                        "Last chunk content:",
+                                        value=chunks[-1].page_content,
+                                        height=200,
+                                        key=f"last_chunk_{file_key}",
+                                        disabled=True
+                                    )
+                                    st.caption(f"Length: {len(chunks[-1].page_content)} characters")
+                            
+                            # Show chunk statistics
+                            chunk_lengths = [len(chunk.page_content) for chunk in chunks]
+                            avg_length = sum(chunk_lengths) / len(chunk_lengths)
+                            min_length = min(chunk_lengths)
+                            max_length = max(chunk_lengths)
+                            
+                            st.info(f"""
+                            **📊 Chunk Statistics:**
+                            - Total chunks: {len(chunks)}
+                            - Average length: {avg_length:.0f} characters
+                            - Shortest chunk: {min_length} characters
+                            - Longest chunk: {max_length} characters
+                            """)
+                            
+                            if len(chunks) > 2:
+                                with st.expander("🔍 View All Chunk Lengths", expanded=False):
+                                    import pandas as pd
+                                    chunk_data = []
+                                    for i, chunk in enumerate(chunks):
+                                        chunk_data.append({
+                                            "Chunk #": i + 1,
+                                            "Length": len(chunk.page_content),
+                                            "Preview": chunk.page_content[:100] + "..." if len(chunk.page_content) > 100 else chunk.page_content
+                                        })
+                                    
+                                    df_chunks = pd.DataFrame(chunk_data)
+                                    st.dataframe(df_chunks, use_container_width=True)
     
-    def process_pdf_document(file, title, author, summary, doc_type, genre, topic, tags, difficulty, chunk_size, chunk_overlap):
-        """Process PDF document: extract text, chunk, embed, and save to both CSV and Supabase."""
-        try:
-            # Reset file pointer
-            file.seek(0)
-            
-            # Extract text from PDF
-            from pypdf import PdfReader
-            import io
-            from langchain.text_splitter import RecursiveCharacterTextSplitter
-            from langchain_core.documents import Document
-            
-            pdf_reader = PdfReader(io.BytesIO(file.read()))
-            full_text = ""
-            
-            # Extract all text
-            for page_num, page in enumerate(pdf_reader.pages):
-                page_text = page.extract_text()
-                full_text += f"\n\n--- Page {page_num + 1} ---\n\n{page_text}"
-            
-            if not full_text.strip():
-                st.error("Could not extract text from PDF")
-                return False
-            
-            # Create document metadata
-            metadata = {
-                "title": title,
-                "author": author,
-                "summary": summary,
-                "type": doc_type,
-                "genre": genre,
-                "topic": topic,
-                "tags": tags,
-                "difficulty": difficulty,
-                "source_type": "PDF",
-                "source": f"PDF: {file.name}"
-            }
-            
-            # Split text into chunks with user-specified parameters
-            text_splitter = RecursiveCharacterTextSplitter(
-                chunk_size=chunk_size,
-                chunk_overlap=chunk_overlap,
-                length_function=len,
-            )
-            
-            # Create document object
-            doc = Document(page_content=full_text, metadata=metadata)
-            
-            # Split into chunks
-            chunks = text_splitter.split_documents([doc])
-            
-            # Add to vector store (Supabase)
-            with st.spinner(f"Embedding {len(chunks)} chunks..."):
-                vector_store.add_documents(chunks)
-            
-            # Add to document tracker CSV
-            file_content = file.read()
-            file.seek(0)
-            
-            doc_id = document_tracker.add_document_record(
-                title=title,
-                author=author,
-                summary=summary,
-                doc_type=doc_type,
-                genre=genre,
-                topic=topic,
-                difficulty=difficulty,
-                source_type="PDF",
-                tags=tags,
-                chunks=len(chunks),
-                chunk_size=chunk_size,
-                chunk_overlap=chunk_overlap,
-                file_content=file_content,
-                file_name=file.name,
-                file_size=file.size
-            )
-            
-            # Also update the legacy CSV for backward compatibility
-            success = add_document_to_csv(
-                title=title,
-                chunks=len(chunks),
-                author=author,
-                doc_type=doc_type,
-                genre=genre,
-                difficulty=difficulty,
-                source_type="PDF",
-                tags=tags,
-                summary=summary,
-                topic=topic
-            )
-            
-            if doc_id and success:
-                st.success(f"✅ Added {len(chunks)} chunks to vector store and updated tracking systems")
-                return True
-            else:
-                st.error("Failed to update tracking systems")
-                return False
-                
-        except Exception as e:
-            st.error(f"Error processing document: {e}")
-            return False
-
     with upload_tab2:
         st.subheader("Add YouTube Videos")
         youtube_url = st.text_input(

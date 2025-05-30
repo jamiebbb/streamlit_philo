@@ -16,9 +16,14 @@ class DocumentTracker:
     Manages document tracking to prevent duplicates and maintain upload history.
     """
     
-    def __init__(self, csv_file: str = "uploaded_documents_tracker.csv"):
+    def __init__(self, csv_file: str = "uploaded_documents_tracker.csv", supabase_client=None):
         self.csv_file = csv_file
+        self.supabase = supabase_client
         self.ensure_csv_exists()
+        
+        # Auto-sync with Supabase if client is provided
+        if self.supabase:
+            self.auto_sync_with_supabase()
     
     def ensure_csv_exists(self):
         """Create the CSV file with proper headers if it doesn't exist."""
@@ -267,6 +272,88 @@ class DocumentTracker:
         except Exception as e:
             print(f"❌ Error exporting metadata: {e}")
             return False
+    
+    def auto_sync_with_supabase(self):
+        """Automatically sync CSV tracker with Supabase documents_enhanced table."""
+        try:
+            print("🔄 Auto-syncing document tracker with Supabase...")
+            
+            # Get existing CSV data
+            csv_df = pd.read_csv(self.csv_file)
+            csv_titles = set(csv_df['title'].tolist()) if not csv_df.empty else set()
+            
+            # Get documents from Supabase
+            table_name = "documents_enhanced"
+            result = self.supabase.table(table_name).select(
+                "title, author, doc_type, genre, topic, difficulty, tags, source_type, summary"
+            ).limit(50000).execute()
+            
+            supabase_docs = result.data
+            
+            if not supabase_docs:
+                print("ℹ️ No documents found in Supabase")
+                return
+            
+            # Count chunks per title in Supabase
+            title_counts = {}
+            doc_by_title = {}
+            
+            for doc in supabase_docs:
+                title = doc.get("title", "Unknown")
+                if title not in title_counts:
+                    title_counts[title] = 0
+                    doc_by_title[title] = doc
+                title_counts[title] += 1
+            
+            # Add missing documents to CSV
+            new_docs_added = 0
+            for title, chunk_count in title_counts.items():
+                if title not in csv_titles:
+                    doc = doc_by_title[title]
+                    
+                    # Add to CSV
+                    import uuid
+                    new_record = {
+                        "id": str(uuid.uuid4()),
+                        "title": title,
+                        "author": doc.get("author", "Unknown"),
+                        "summary": doc.get("summary", ""),
+                        "type": doc.get("doc_type", "Document"),
+                        "genre": doc.get("genre", "Other"),
+                        "topic": doc.get("topic", "General"),
+                        "difficulty": doc.get("difficulty", "Intermediate"),
+                        "source_type": doc.get("source_type", "unknown"),
+                        "tags": doc.get("tags", ""),
+                        "chunks": chunk_count,
+                        "chunk_size": 0,  # Unknown from Supabase
+                        "chunk_overlap": 0,  # Unknown from Supabase
+                        "file_hash": hashlib.sha256(title.encode()).hexdigest(),
+                        "file_name": "",
+                        "file_size": 0,
+                        "upload_date": datetime.now().isoformat(),
+                        "source_url": "",
+                        "video_id": ""
+                    }
+                    
+                    csv_df = pd.concat([csv_df, pd.DataFrame([new_record])], ignore_index=True)
+                    new_docs_added += 1
+            
+            # Save updated CSV
+            if new_docs_added > 0:
+                csv_df.to_csv(self.csv_file, index=False)
+                print(f"✅ Auto-sync complete: Added {new_docs_added} documents to tracker")
+            else:
+                print("✅ Auto-sync complete: Tracker is up to date")
+                
+        except Exception as e:
+            print(f"❌ Auto-sync failed: {e}")
+    
+    def sync_with_supabase(self):
+        """Manual sync method for button clicks."""
+        if self.supabase:
+            self.auto_sync_with_supabase()
+        else:
+            print("❌ Supabase client not available for sync")
 
 
 # Global instance for use throughout the application

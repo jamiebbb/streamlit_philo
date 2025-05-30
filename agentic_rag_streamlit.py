@@ -32,7 +32,7 @@ from feedback_utils import FeedbackHandler
 from enhanced_vector_store import EnhancedSupabaseVectorStore, create_enhanced_vector_store
 
 # import document tracker
-from document_tracker import document_tracker
+from document_tracker import DocumentTracker
 
 # load environment variables
 load_dotenv(override=True)  
@@ -45,6 +45,9 @@ USE_ENHANCED_STORE = True
 supabase_url = os.environ.get("SUPABASE_URL")
 supabase_key = os.environ.get("SUPABASE_SERVICE_KEY")
 supabase: Client = create_client(supabase_url, supabase_key)
+
+# Initialize document tracker with auto-sync
+document_tracker = DocumentTracker(supabase_client=supabase)
 
 # Initialize feedback handler
 feedback_handler = FeedbackHandler(supabase)
@@ -501,11 +504,68 @@ def process_youtube_video(video_id, transcript, title, author, summary, genre, t
             st.error(f"Failed to add to CSV: {e}")
             return False
         
+        # Add to DocumentTracker for better tracking
+        try:
+            document_tracker.add_document_record(
+                title=title,
+                author=author,
+                summary=summary,
+                doc_type="Video",
+                genre=genre,
+                topic=topic,
+                difficulty=difficulty,
+                source_type="youtube_video",
+                tags=tags,
+                chunks=len(chunks),
+                chunk_size=chunk_size,
+                chunk_overlap=chunk_overlap,
+                source_url=f"https://www.youtube.com/watch?v={video_id}",
+                video_id=video_id
+            )
+            st.success("📊 Added to enhanced document tracker")
+        except Exception as e:
+            st.warning(f"Enhanced tracker update failed: {e}")
+        
         return True
         
     except Exception as e:
         st.error(f"Error processing YouTube video: {e}")
         return False
+
+def preview_youtube_chunks(transcript, chunk_size, chunk_overlap, title="YouTube Video"):
+    """Preview YouTube video chunks before uploading."""
+    try:
+        from langchain.text_splitter import RecursiveCharacterTextSplitter
+        
+        # Create text splitter with specified parameters
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            length_function=len,
+        )
+        
+        # Split transcript into chunks
+        chunks = text_splitter.split_text(transcript)
+        
+        # Calculate statistics
+        chunk_lengths = [len(chunk) for chunk in chunks]
+        avg_length = sum(chunk_lengths) / len(chunk_lengths) if chunk_lengths else 0
+        min_length = min(chunk_lengths) if chunk_lengths else 0
+        max_length = max(chunk_lengths) if chunk_lengths else 0
+        
+        return {
+            "chunks": chunks,
+            "total_chunks": len(chunks),
+            "avg_length": round(avg_length),
+            "min_length": min_length,
+            "max_length": max_length,
+            "first_chunk": chunks[0] if chunks else "",
+            "last_chunk": chunks[-1] if len(chunks) > 1 else chunks[0] if chunks else ""
+        }
+        
+    except Exception as e:
+        st.error(f"Error previewing chunks: {e}")
+        return None
 
 # initiating the agent
 agent = create_tool_calling_agent(llm, tools, prompt)
@@ -1061,11 +1121,11 @@ with tab2:
         with col1:
             st.success(f"📄 Loaded {len(df)} documents with {total_chunks} total chunks from persistent tracker")
         with col2:
-            if st.button("🔄 Sync with Supabase"):
+            st.info("🔄 Auto-synced with Supabase")
+            if st.button("🔄 Manual Sync", help="Force sync with Supabase if needed"):
                 with st.spinner("Syncing with Supabase..."):
-                    # Re-initialize from Supabase
-                    if os.path.exists(csv_file):
-                        os.remove(csv_file)
+                    document_tracker.sync_with_supabase()
+                    st.success("✅ Manual sync completed!")
                     st.rerun()
         
         if display_data:
@@ -1857,31 +1917,110 @@ with tab3:
                             with col2:
                                 chunk_overlap = st.slider("Chunk Overlap", 0, 300, 200, 25, key=f"youtube_chunk_overlap_{video_id}")
                             
-                            col1, col2 = st.columns(2)
+                            # Preview chunks button
+                            col1, col2, col3 = st.columns(3)
                             with col1:
-                                if st.form_submit_button("✅ Upload to Supabase", type="primary"):
-                                    # Process the YouTube video
-                                    success = process_youtube_video(
-                                        video_id,
-                                        st.session_state[f"youtube_transcript_{video_id}"],
-                                        title, author, summary, genre, topic, tags, difficulty,
-                                        metadata, chunk_size, chunk_overlap
-                                    )
-                                    if success:
-                                        st.success(f"🎉 Successfully processed {title}!")
-                                        # Clear all session state related to this file
-                                        keys_to_remove = [key for key in st.session_state.keys() if f"youtube_{video_id}" in key]
-                                        for key in keys_to_remove:
-                                            del st.session_state[key]
-                                        st.rerun()
+                                if st.form_submit_button("🔍 Preview Chunks", type="secondary"):
+                                    with st.spinner("Generating chunk preview..."):
+                                        transcript = st.session_state[f"youtube_transcript_{video_id}"]
+                                        chunk_preview = preview_youtube_chunks(transcript, chunk_size, chunk_overlap, title)
+                                        if chunk_preview:
+                                            st.session_state[f"youtube_chunks_preview_{video_id}"] = chunk_preview
+                                            st.success(f"✅ Generated {chunk_preview['total_chunks']} chunks for preview")
+                                            st.rerun()
                             
                             with col2:
+                                # Only show upload button if chunks have been previewed
+                                if f"youtube_chunks_preview_{video_id}" in st.session_state:
+                                    if st.form_submit_button("✅ Upload to Supabase", type="primary"):
+                                        with st.spinner("🚀 Processing YouTube video..."):
+                                            # Show progress steps
+                                            progress_placeholder = st.empty()
+                                            
+                                            progress_placeholder.info("📝 Preparing chunks...")
+                                            
+                                            # Process the YouTube video
+                                            success = process_youtube_video(
+                                                video_id,
+                                                st.session_state[f"youtube_transcript_{video_id}"],
+                                                title, author, summary, genre, topic, tags, difficulty,
+                                                metadata, chunk_size, chunk_overlap
+                                            )
+                                            
+                                            if success:
+                                                progress_placeholder.success("🎉 Successfully uploaded YouTube video!")
+                                                st.balloons()
+                                                
+                                                # Clear all session state related to this video
+                                                keys_to_remove = [key for key in st.session_state.keys() if video_id in key]
+                                                for key in keys_to_remove:
+                                                    del st.session_state[key]
+                                                st.rerun()
+                                            else:
+                                                progress_placeholder.error("❌ Upload failed. Please try again.")
+                                else:
+                                    st.form_submit_button("✅ Upload to Supabase", type="primary", disabled=True, help="Preview chunks first")
+                            
+                            with col3:
                                 if st.form_submit_button("🗑️ Cancel", type="secondary"):
                                     # Clear the metadata from session state
                                     for key in list(st.session_state.keys()):
                                         if video_id in key:
                                             del st.session_state[key]
                                     st.rerun()
+                        
+                        # Show chunk preview if available
+                        if f"youtube_chunks_preview_{video_id}" in st.session_state:
+                            chunk_preview = st.session_state[f"youtube_chunks_preview_{video_id}"]
+                            
+                            st.subheader(f"📺 Chunk Preview ({chunk_preview['total_chunks']} total chunks)")
+                            
+                            col1, col2 = st.columns(2)
+                            
+                            with col1:
+                                st.markdown("**🟢 First Chunk:**")
+                                st.text_area(
+                                    "First chunk content:",
+                                    value=chunk_preview['first_chunk'],
+                                    height=200,
+                                    key=f"youtube_first_chunk_{video_id}",
+                                    disabled=True
+                                )
+                                st.caption(f"Length: {len(chunk_preview['first_chunk'])} characters")
+                            
+                            with col2:
+                                st.markdown("**🔴 Last Chunk:**")
+                                st.text_area(
+                                    "Last chunk content:",
+                                    value=chunk_preview['last_chunk'],
+                                    height=200,
+                                    key=f"youtube_last_chunk_{video_id}",
+                                    disabled=True
+                                )
+                                st.caption(f"Length: {len(chunk_preview['last_chunk'])} characters")
+                            
+                            # Show chunk statistics
+                            st.info(f"""
+                            **📊 Chunk Statistics:**
+                            - Total chunks: {chunk_preview['total_chunks']}
+                            - Average length: {chunk_preview['avg_length']} characters
+                            - Shortest chunk: {chunk_preview['min_length']} characters
+                            - Longest chunk: {chunk_preview['max_length']} characters
+                            """)
+                            
+                            if chunk_preview['total_chunks'] > 2:
+                                with st.expander("🔍 View All Chunks", expanded=False):
+                                    import pandas as pd
+                                    chunk_data = []
+                                    for i, chunk in enumerate(chunk_preview['chunks']):
+                                        chunk_data.append({
+                                            "Chunk #": i + 1,
+                                            "Length": len(chunk),
+                                            "Preview": chunk[:100] + "..." if len(chunk) > 100 else chunk
+                                        })
+                                    
+                                    df_chunks = pd.DataFrame(chunk_data)
+                                    st.dataframe(df_chunks, use_container_width=True, height=300)
 
     with upload_tab3:
         st.subheader("📊 CSV Management")

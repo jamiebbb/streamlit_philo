@@ -483,6 +483,49 @@ class EnhancedSupabaseVectorStore(SupabaseVectorStore):
                 print(f"Both parameter orders failed: {e2}")
                 return []
 
+    def similarity_search(
+        self, query: str, k: int = 4, **kwargs
+    ) -> List[Document]:
+        """
+        Override the main similarity_search method to use our custom function.
+        
+        Args:
+            query: Query string
+            k: Number of documents to return
+            **kwargs: Additional arguments
+            
+        Returns:
+            List of Document objects
+        """
+        try:
+            # Get embedding for the query
+            if hasattr(self, '_embedding'):
+                embedding_model = self._embedding
+            elif hasattr(self, 'embedding'):
+                embedding_model = self.embedding
+            else:
+                raise AttributeError("No embedding model found")
+            
+            query_embedding = embedding_model.embed_query(query)
+            
+            # Use our custom similarity search with score
+            docs_with_scores = self.similarity_search_with_score_by_vector(
+                query_embedding, k=k, **kwargs
+            )
+            
+            # Return just the documents (without scores)
+            return [doc for doc, score in docs_with_scores]
+            
+        except Exception as e:
+            print(f"Error in similarity_search: {e}")
+            # Fallback to parent method if our custom method fails
+            try:
+                print("Falling back to parent similarity_search method...")
+                return super().similarity_search(query, k=k, **kwargs)
+            except Exception as e2:
+                print(f"Parent method also failed: {e2}")
+                return []
+
 
 def create_enhanced_vector_store(supabase_client: Client, embeddings, table_name: str = "documents_enhanced"):
     """

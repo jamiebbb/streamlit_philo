@@ -396,7 +396,7 @@ class EnhancedSupabaseVectorStore(SupabaseVectorStore):
         try:
             # Call the Supabase function with correct parameter order
             # Your function expects: match_documents_enhanced(match_count, match_threshold, query_embedding)
-            match_threshold = kwargs.get("match_threshold", 0.0)
+            match_threshold = kwargs.get("match_threshold", 0.0)  # Changed from 0.78 to 0.0 to get top K regardless of similarity
             
             print(f"🔍 VECTOR DEBUG: Trying first parameter order - match_count={k}, match_threshold={match_threshold}")
             

@@ -129,15 +129,11 @@ def retrieve(query: str):
         return f"Error: Vector store initialization failed. Please check your database setup. Error details: {vector_store_error}", []
     
     try:
-        print(f"🔍 DEBUG: Starting retrieval for query: '{query}'")
-        print(f"🔍 DEBUG: Vector store type: {type(vector_store).__name__}")
-        print(f"🔍 DEBUG: Vector store table: {getattr(vector_store, 'table_name', 'Unknown')}")
-        print(f"🔍 DEBUG: Vector store query_name: {getattr(vector_store, 'query_name', 'Unknown')}")
+        print(f"🔍 Retrieving documents for: '{query}'")
         
         # Primary search: Semantic similarity with more results
-        print(f"🔍 DEBUG: Calling similarity_search with k=5...")
         retrieved_docs = vector_store.similarity_search(query, k=5)
-        print(f"🔍 DEBUG: Retrieved {len(retrieved_docs)} documents from similarity search")
+        print(f"🔍 Found {len(retrieved_docs)} documents")
         
         # Debug: Print first few docs
         for i, doc in enumerate(retrieved_docs[:2]):
@@ -243,34 +239,9 @@ def retrieve(query: str):
             return f"Error retrieving documents: {error_msg}", []
 
 # combining all tools
-tools = [retrieve, debug_search]  # Temporarily enable debug tool
+tools = [retrieve]  # Removed debug tool to fix NameError
 
-# Add debug tool for testing
-@tool(response_format="content_and_artifact")
-def debug_search(query: str):
-    """Debug tool to test search functionality and show available documents."""
-    if vector_store is None:
-        return "Vector store not initialized", []
-    
-    try:
-        # Test basic search
-        docs = vector_store.similarity_search(query, k=10)
-        
-        # Get some sample documents to show what's available
-        if hasattr(vector_store, 'search_by_metadata'):
-            sample_docs = vector_store.search_by_metadata({}, limit=5)
-            sample_info = "Sample documents in database:\n"
-            for doc in sample_docs:
-                sample_info += f"- {doc.get('title', 'Unknown')} by {doc.get('author', 'Unknown')}\n"
-        else:
-            sample_info = "Enhanced search not available"
-        
-        result = f"Search for '{query}' found {len(docs)} documents.\n\n{sample_info}"
-        return result, docs
-    except Exception as e:
-        return f"Debug search failed: {e}", []
-
-# Add debug tool to tools list for testing (comment out in production)
+# Add debug tool for testing (commented out to prevent errors)
 # tools.append(debug_search)
 
 # initiating the agent

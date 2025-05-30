@@ -301,12 +301,10 @@ class FeedbackHandler:
     def test_supabase_connection(self):
         """Test Supabase connection and permissions for feedback table."""
         try:
-            # Test read permission
-            print("Testing Supabase connection...")
+            # Test read permission (silent)
             result = self.supabase.table("feedback").select("*").limit(1).execute()
-            print(f"✅ Read test successful. Found {len(result.data)} records.")
             
-            # Test write permission with a test record
+            # Test write permission with a test record (silent)
             test_data = {
                 "query": "test_query",
                 "response": "test_response", 
@@ -318,17 +316,15 @@ class FeedbackHandler:
             }
             
             insert_result = self.supabase.table("feedback").insert(test_data).execute()
-            print(f"✅ Write test successful. Inserted record: {insert_result.data}")
             
-            # Clean up test record
+            # Clean up test record (silent)
             if insert_result.data and len(insert_result.data) > 0:
                 test_id = insert_result.data[0].get('id')
                 if test_id:
                     delete_result = self.supabase.table("feedback").delete().eq('id', test_id).execute()
-                    print(f"✅ Cleanup successful. Deleted test record.")
             
             return True
             
         except Exception as e:
-            print(f"❌ Supabase connection test failed: {e}")
+            print(f"❌ Feedback system connection test failed: {e}")
             return False 

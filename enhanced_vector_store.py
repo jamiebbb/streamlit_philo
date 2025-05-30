@@ -31,11 +31,11 @@ class EnhancedSupabaseVectorStore(SupabaseVectorStore):
         This method checks if the enhanced columns exist and creates them if needed.
         """
         try:
-            # Check if enhanced columns exist by trying to select them
+            # Check if enhanced columns exist by trying to select them (silent check)
             result = self._client.table(self.table_name).select(
                 "id, title, author, doc_type, genre, topic, difficulty, tags, source_type, summary"
             ).limit(1).execute()
-            print("✅ Enhanced columns already exist")
+            # Silent success - no print statement
         except Exception as e:
             print(f"⚠️ Enhanced columns not found: {e}")
             print("📝 You need to add these columns to your Supabase table:")
@@ -126,6 +126,17 @@ class EnhancedSupabaseVectorStore(SupabaseVectorStore):
             
             embeddings = embedding_model.embed_documents(texts)
             
+            # Calculate total chunks for this document batch (assuming all chunks are from same document)
+            total_chunks = len(documents)
+            
+            # Group documents by title to handle multiple documents with same title
+            documents_by_title = {}
+            for i, doc in enumerate(documents):
+                title = doc.metadata.get("title", "Unknown")
+                if title not in documents_by_title:
+                    documents_by_title[title] = []
+                documents_by_title[title].append((i, doc))
+            
             for doc, embedding in zip(documents, embeddings):
                 # Generate unique ID
                 doc_id = str(uuid.uuid4())
@@ -135,6 +146,17 @@ class EnhancedSupabaseVectorStore(SupabaseVectorStore):
                 
                 # Debug: Print metadata to see what we're working with
                 print(f"📊 Debug - Document metadata: {metadata}")
+                
+                # Calculate chunk_id (1-based indexing)
+                title = metadata.get("title", "Unknown")
+                chunk_id = 1
+                for i, (doc_idx, _) in enumerate(documents_by_title[title]):
+                    if documents[doc_idx] == doc:
+                        chunk_id = i + 1
+                        break
+                
+                # Extract source URL from metadata
+                source_url = self._extract_source_url(metadata)
                 
                 # Prepare data for insertion with all columns
                 insert_data = {
@@ -151,12 +173,16 @@ class EnhancedSupabaseVectorStore(SupabaseVectorStore):
                     "difficulty": metadata.get("difficulty", "Unknown"),
                     "tags": metadata.get("tags", ""),
                     "source_type": metadata.get("source_type", "Unknown"),
-                    "summary": metadata.get("summary", "")
+                    "summary": metadata.get("summary", ""),
+                    # New columns
+                    "chunk_id": chunk_id,
+                    "total_chunks": len(documents_by_title[title]),
+                    "source": source_url
                 }
                 
                 # Debug: Print what we're inserting
                 print(f"📊 Debug - Insert data keys: {list(insert_data.keys())}")
-                print(f"📊 Debug - Insert data values: title='{insert_data['title']}', author='{insert_data['author']}', doc_type='{insert_data['doc_type']}'")
+                print(f"📊 Debug - Insert data values: title='{insert_data['title']}', chunk_id={insert_data['chunk_id']}, total_chunks={insert_data['total_chunks']}, source='{insert_data['source']}'")
                 
                 # Insert into enhanced table
                 try:
@@ -166,7 +192,7 @@ class EnhancedSupabaseVectorStore(SupabaseVectorStore):
                     print(f"📊 Debug - Insert result success: {len(result.data) > 0}")
                     if result.data:
                         inserted_doc = result.data[0]
-                        print(f"📊 Debug - Inserted doc columns: title='{inserted_doc.get('title')}', author='{inserted_doc.get('author')}', doc_type='{inserted_doc.get('doc_type')}'")
+                        print(f"📊 Debug - Inserted doc columns: title='{inserted_doc.get('title')}', chunk_id={inserted_doc.get('chunk_id')}, total_chunks={inserted_doc.get('total_chunks')}")
                     else:
                         print(f"⚠️ Warning: No data returned for document {doc_id}")
                         
@@ -185,6 +211,47 @@ class EnhancedSupabaseVectorStore(SupabaseVectorStore):
             print(f"❌ Error adding documents to enhanced table: {e}")
             raise e
     
+    def _extract_source_url(self, metadata: Dict[str, Any]) -> str:
+        """
+        Extract source URL from metadata based on source type.
+        
+        Args:
+            metadata: Document metadata dictionary
+            
+        Returns:
+            Source URL string or empty string if not found
+        """
+        # Check for explicit source URL
+        if "source" in metadata and metadata["source"]:
+            return str(metadata["source"])
+        
+        # Check for URL field
+        if "url" in metadata and metadata["url"]:
+            return str(metadata["url"])
+        
+        # Check for YouTube URL
+        if "youtube_url" in metadata and metadata["youtube_url"]:
+            return str(metadata["youtube_url"])
+        
+        # Check for web URL
+        if "web_url" in metadata and metadata["web_url"]:
+            return str(metadata["web_url"])
+        
+        # Check source_type and try to construct URL
+        source_type = metadata.get("source_type", "").lower()
+        
+        if source_type == "youtube" and "video_id" in metadata:
+            return f"https://www.youtube.com/watch?v={metadata['video_id']}"
+        
+        if source_type == "pdf" and "file_path" in metadata:
+            return metadata["file_path"]
+        
+        if source_type == "web" and "page_url" in metadata:
+            return metadata["page_url"]
+        
+        # Return empty string if no source found
+        return ""
+    
     def _update_dedicated_columns(self, documents: List[Document], doc_ids: List[str]):
         """
         Update the dedicated metadata columns for the inserted documents.
@@ -194,8 +261,27 @@ class EnhancedSupabaseVectorStore(SupabaseVectorStore):
             doc_ids: List of corresponding document IDs
         """
         try:
-            for doc, doc_id in zip(documents, doc_ids):
+            # Group documents by title to calculate chunk information
+            documents_by_title = {}
+            for i, doc in enumerate(documents):
+                title = doc.metadata.get("title", "Unknown")
+                if title not in documents_by_title:
+                    documents_by_title[title] = []
+                documents_by_title[title].append((i, doc))
+            
+            for i, (doc, doc_id) in enumerate(zip(documents, doc_ids)):
                 metadata = doc.metadata
+                
+                # Calculate chunk_id (1-based indexing)
+                title = metadata.get("title", "Unknown")
+                chunk_id = 1
+                for j, (doc_idx, _) in enumerate(documents_by_title[title]):
+                    if doc_idx == i:
+                        chunk_id = j + 1
+                        break
+                
+                # Extract source URL from metadata
+                source_url = self._extract_source_url(metadata)
                 
                 # Extract metadata fields with defaults and proper mapping
                 update_data = {
@@ -207,7 +293,11 @@ class EnhancedSupabaseVectorStore(SupabaseVectorStore):
                     "difficulty": metadata.get("difficulty", "Unknown"),
                     "tags": metadata.get("tags", ""),
                     "source_type": metadata.get("source_type", "Unknown"),
-                    "summary": metadata.get("summary", "")
+                    "summary": metadata.get("summary", ""),
+                    # New columns
+                    "chunk_id": chunk_id,
+                    "total_chunks": len(documents_by_title[title]),
+                    "source": source_url
                 }
                 
                 # Update the dedicated columns

@@ -36,7 +36,7 @@ from document_tracker import document_tracker
 
 # load environment variables
 load_dotenv(override=True)  
-print("DEBUG - OpenAI API Key:", os.environ.get("OPENAI_API_KEY")[:10] + "..." if os.environ.get("OPENAI_API_KEY") else "NOT FOUND")
+# Removed debug print for API key
 
 # Always use enhanced vector store
 USE_ENHANCED_STORE = True
@@ -49,8 +49,7 @@ supabase: Client = create_client(supabase_url, supabase_key)
 # Initialize feedback handler
 feedback_handler = FeedbackHandler(supabase)
 
-# Test Supabase connection for feedback
-print("Testing feedback system...")
+# Test Supabase connection for feedback (silent unless error)
 feedback_handler.test_supabase_connection()
 
 # initiating embeddings model
@@ -66,12 +65,9 @@ try:
         embeddings=embeddings,
         table_name="documents_enhanced"
     )
-    print("✅ Using Enhanced Vector Store")
     vector_store_status = "enhanced"
 except Exception as e:
-    print(f"❌ Enhanced store failed: {e}")
     vector_store_error = str(e)
-    print("Falling back to standard vector store")
     try:
         vector_store = SupabaseVectorStore(
             embedding=embeddings,
@@ -79,10 +75,8 @@ except Exception as e:
             table_name="documents",
             query_name="match_documents",
         )
-        print("✅ Using Standard Vector Store")
         vector_store_status = "standard"
     except Exception as e2:
-        print(f"❌ Standard store also failed: {e2}")
         vector_store_status = "failed"
         vector_store_error = f"Enhanced: {e}, Standard: {e2}"
         # Create a dummy vector store that will show helpful error messages
@@ -733,55 +727,14 @@ with tab2:
             st.info("Falling back to standard view...")
     
     try:
-        # Try to read from CSV first (faster and more reliable)
+        # Use persistent CSV-based document tracking
         import pandas as pd
         csv_file = "documents_metadata.csv"
         
-        if os.path.exists(csv_file):
-            st.info("📄 Loading from CSV file...")
-            df = pd.read_csv(csv_file)
-            
-            # Convert DataFrame to the format we need
-            display_data = []
-            for _, row in df.iterrows():
-                display_data.append({
-                    "Title": row.get("title", "Unknown"),
-                    "Chunks": row.get("chunks", 0),
-                    "Author": row.get("author", "Unknown"),
-                    "Summary": str(row.get("summary", ""))[:100] + "..." if len(str(row.get("summary", ""))) > 100 else str(row.get("summary", "")),
-                    "Type": row.get("type", "Unknown"),
-                    "Genre": row.get("genre", "Unknown"),
-                    "Topic": row.get("topic", "Unknown"),
-                    "Difficulty": row.get("difficulty", "Unknown"),
-                    "Source Type": row.get("source_type", "Unknown"),
-                    "Tags": str(row.get("tags", "Unknown"))[:50] + "..." if len(str(row.get("tags", "Unknown"))) > 50 else str(row.get("tags", "Unknown"))
-                })
-            
-            total_chunks = df["chunks"].sum() if "chunks" in df.columns else len(df)
-            st.success(f"✅ Loaded {len(df)} documents with {total_chunks} total chunks from CSV")
-            
-            # Offer to create CSV for future use
-            if st.button("💾 Save to CSV for faster loading"):
-                df_to_save = pd.DataFrame([
-                    {
-                        "title": item["Title"],
-                        "chunks": item["Chunks"],
-                        "author": item["Author"],
-                        "type": item["Type"],
-                        "genre": item["Genre"],
-                        "difficulty": item["Difficulty"],
-                        "source_type": item["Source Type"],
-                        "tags": item["Tags"]
-                    }
-                    for item in display_data
-                ])
-                df_to_save.to_csv(csv_file, index=False)
-                st.success(f"✅ Saved {len(df_to_save)} documents to {csv_file}")
-            
-        else:
-            st.warning("📄 CSV file not found. Falling back to Supabase query...")
-            # Fallback to Supabase if CSV doesn't exist
-            with st.spinner("Loading from Supabase..."):
+        # Initialize CSV if it doesn't exist
+        if not os.path.exists(csv_file):
+            st.info("📄 Initializing document tracker from Supabase...")
+            with st.spinner("Loading documents from Supabase..."):
                 table_name = "documents_enhanced"
                 
                 # Use enhanced table with dedicated columns
@@ -790,11 +743,7 @@ with tab2:
                 ).limit(50000).execute()
                 documents = result.data
                 
-                if not documents:
-                    st.info("No documents found in the enhanced vector store.")
-                    display_data = []
-                    total_chunks = 0
-                else:
+                if documents:
                     # Count documents by title
                     title_counts = {}
                     doc_by_title = {}
@@ -806,43 +755,65 @@ with tab2:
                             doc_by_title[title] = doc
                         title_counts[title] += 1
                     
-                    # Create display data
-                    display_data = []
+                    # Create CSV data
+                    csv_data = []
                     for title, count in title_counts.items():
                         doc = doc_by_title[title]
-                        display_data.append({
-                            "Title": title,
-                            "Chunks": count,
-                            "Author": doc.get("author", "Unknown"),
-                            "Summary": str(doc.get("summary", ""))[:100] + "..." if len(str(doc.get("summary", ""))) > 100 else str(doc.get("summary", "")),
-                            "Type": doc.get("doc_type", "Unknown"),
-                            "Genre": doc.get("genre", "Unknown"),
-                            "Topic": doc.get("topic", "Unknown"),
-                            "Difficulty": doc.get("difficulty", "Unknown"),
-                            "Source Type": doc.get("source_type", "Unknown"),
-                            "Tags": str(doc.get("tags", ""))[:50] + "..." if len(str(doc.get("tags", ""))) > 50 else str(doc.get("tags", ""))
+                        csv_data.append({
+                            "title": title,
+                            "chunks": count,
+                            "author": doc.get("author", "Unknown"),
+                            "summary": doc.get("summary", ""),
+                            "type": doc.get("doc_type", "Unknown"),
+                            "genre": doc.get("genre", "Unknown"),
+                            "topic": doc.get("topic", "Unknown"),
+                            "difficulty": doc.get("difficulty", "Unknown"),
+                            "source_type": doc.get("source_type", "Unknown"),
+                            "tags": doc.get("tags", "")
                         })
                     
-                    total_chunks = len(documents)
-                    st.success(f"📊 Loaded {len(title_counts)} documents with {total_chunks} total chunks from Enhanced Supabase")
-                
-                # Offer to create CSV for future use
-                if st.button("💾 Save to CSV for faster loading"):
-                    df_to_save = pd.DataFrame([
-                        {
-                            "title": item["Title"],
-                            "chunks": item["Chunks"],
-                            "author": item["Author"],
-                            "type": item["Type"],
-                            "genre": item["Genre"],
-                            "difficulty": item["Difficulty"],
-                            "source_type": item["Source Type"],
-                            "tags": item["Tags"]
-                        }
-                        for item in display_data
-                    ])
-                    df_to_save.to_csv(csv_file, index=False)
-                    st.success(f"✅ Saved {len(df_to_save)} documents to {csv_file}")
+                    # Save to CSV
+                    df = pd.DataFrame(csv_data)
+                    df.to_csv(csv_file, index=False)
+                    st.success(f"✅ Initialized document tracker with {len(df)} documents")
+                else:
+                    # Create empty CSV with proper columns
+                    df = pd.DataFrame(columns=["title", "chunks", "author", "summary", "type", "genre", "topic", "difficulty", "source_type", "tags"])
+                    df.to_csv(csv_file, index=False)
+                    st.info("📄 Created empty document tracker")
+        
+        # Load from persistent CSV
+        df = pd.read_csv(csv_file)
+        
+        # Convert DataFrame to display format
+        display_data = []
+        for _, row in df.iterrows():
+            display_data.append({
+                "Title": row.get("title", "Unknown"),
+                "Chunks": row.get("chunks", 0),
+                "Author": row.get("author", "Unknown"),
+                "Summary": str(row.get("summary", ""))[:100] + "..." if len(str(row.get("summary", ""))) > 100 else str(row.get("summary", "")),
+                "Type": row.get("type", "Unknown"),
+                "Genre": row.get("genre", "Unknown"),
+                "Topic": row.get("topic", "Unknown"),
+                "Difficulty": row.get("difficulty", "Unknown"),
+                "Source Type": row.get("source_type", "Unknown"),
+                "Tags": str(row.get("tags", "Unknown"))[:50] + "..." if len(str(row.get("tags", "Unknown"))) > 50 else str(row.get("tags", "Unknown"))
+            })
+        
+        total_chunks = df["chunks"].sum() if "chunks" in df.columns and len(df) > 0 else 0
+        
+        # Add sync check with Supabase
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            st.success(f"📄 Loaded {len(df)} documents with {total_chunks} total chunks from persistent tracker")
+        with col2:
+            if st.button("🔄 Sync with Supabase"):
+                with st.spinner("Syncing with Supabase..."):
+                    # Re-initialize from Supabase
+                    if os.path.exists(csv_file):
+                        os.remove(csv_file)
+                    st.rerun()
         
         if display_data:
             # Sort by number of chunks
@@ -862,7 +833,7 @@ with tab2:
             st.subheader("Document Details")
             st.dataframe(display_data, use_container_width=True)
             
-            # Add filtering options for CSV/standard view
+            # Add filtering options
             st.subheader("Filter Documents")
             
             # Filter by type
@@ -878,11 +849,11 @@ with tab2:
                 st.subheader("Filtered Results")
                 st.dataframe(filtered_data, use_container_width=True)
         else:
-            st.info("No documents found.")
+            st.info("No documents found in tracker.")
                 
     except Exception as e:
-        st.error(f"Error loading document data: {e}")
-        st.info("💡 Try creating a documents_metadata.csv file with columns: title, chunks, author, type, genre, difficulty, source_type, tags")
+        st.error(f"Error loading document tracker: {e}")
+        st.info("💡 The document tracker will be automatically created when you upload your first document.")
 
 # TAB 3: DOCUMENT UPLOAD
 with tab3:
@@ -893,7 +864,7 @@ with tab3:
     upload_tab1, upload_tab2, upload_tab3 = st.tabs(["📄 PDF Upload", "🎥 YouTube URL", "📊 CSV Management"])
     
     def add_document_to_csv(title, chunks, author, doc_type, genre, difficulty, source_type, tags, summary="", topic=""):
-        """Add a new document entry to the CSV file."""
+        """Add or update a document entry in the persistent CSV tracker."""
         try:
             import pandas as pd
             csv_file = "documents_metadata.csv"
@@ -915,17 +886,43 @@ with tab3:
             # Read existing CSV or create new DataFrame
             if os.path.exists(csv_file):
                 df = pd.read_csv(csv_file)
+                
+                # Check if document already exists (update instead of add)
+                existing_idx = df[df['title'] == title].index
+                if len(existing_idx) > 0:
+                    # Update existing document
+                    for col, value in new_row.items():
+                        df.loc[existing_idx[0], col] = value
+                else:
+                    # Add new document
+                    df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
             else:
+                # Create new CSV with proper columns
                 df = pd.DataFrame(columns=["title", "chunks", "author", "summary", "type", "genre", "topic", "difficulty", "source_type", "tags"])
-            
-            # Add new row
-            df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+                df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
             
             # Save back to CSV
             df.to_csv(csv_file, index=False)
             return True
         except Exception as e:
-            st.error(f"Error updating CSV: {e}")
+            st.error(f"Error updating document tracker: {e}")
+            return False
+    
+    def remove_document_from_csv(title):
+        """Remove a document from the persistent CSV tracker."""
+        try:
+            import pandas as pd
+            csv_file = "documents_metadata.csv"
+            
+            if os.path.exists(csv_file):
+                df = pd.read_csv(csv_file)
+                # Remove document with matching title
+                df = df[df['title'] != title]
+                df.to_csv(csv_file, index=False)
+                return True
+            return False
+        except Exception as e:
+            st.error(f"Error removing from document tracker: {e}")
             return False
 
     def get_document_chunk_count(title):
@@ -1161,7 +1158,7 @@ with tab3:
             
             if doc_id and success:
                 st.success(f"✅ Added {len(chunks)} chunks to vector store and updated tracking systems")
-                st.info(f"📄 A new row has been added to the CSV file: documents_metadata.csv")
+                st.info(f"📄 Document tracker updated with new entry")
                 return True
             else:
                 st.error("Failed to update tracking systems")
@@ -1814,16 +1811,19 @@ with tab3:
                                 success = document_tracker.remove_document(doc_id)
                                 
                                 if success:
+                                    # Also remove from persistent CSV tracker
+                                    remove_document_from_csv(selected_title)
+                                    
                                     # Also remove ALL chunks from Supabase enhanced store
                                     supabase_success, chunk_count = delete_document_from_supabase(selected_title)
                                     
                                     if supabase_success:
                                         if chunk_count > 0:
-                                            st.success(f"✅ Document deleted from CSV and {chunk_count} chunks deleted from Supabase!")
+                                            st.success(f"✅ Document removed from tracker and {chunk_count} chunks deleted from Supabase!")
                                         else:
-                                            st.success("✅ Document deleted from CSV! (No chunks found in Supabase)")
+                                            st.success("✅ Document removed from tracker! (No chunks found in Supabase)")
                                     else:
-                                        st.warning(f"⚠️ Deleted from CSV but Supabase deletion failed")
+                                        st.warning(f"⚠️ Removed from tracker but Supabase deletion failed")
                                         st.info("💡 You may need to manually delete the chunks from Supabase")
                                     
                                     st.rerun()
@@ -2297,6 +2297,7 @@ Difficulty: [Beginner/Intermediate/Advanced/Expert]"""
             
             if doc_id and success:
                 st.success(f"✅ Added {len(chunks)} chunks to vector store and updated tracking systems")
+                st.info(f"📄 Document tracker updated with new entry")
                 return True
             else:
                 st.error("Failed to update tracking systems")

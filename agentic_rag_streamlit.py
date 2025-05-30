@@ -129,11 +129,24 @@ def retrieve(query: str):
         return f"Error: Vector store initialization failed. Please check your database setup. Error details: {vector_store_error}", []
     
     try:
+        print(f"🔍 DEBUG: Starting retrieval for query: '{query}'")
+        print(f"🔍 DEBUG: Vector store type: {type(vector_store).__name__}")
+        print(f"🔍 DEBUG: Vector store table: {getattr(vector_store, 'table_name', 'Unknown')}")
+        print(f"🔍 DEBUG: Vector store query_name: {getattr(vector_store, 'query_name', 'Unknown')}")
+        
         # Primary search: Semantic similarity with more results
+        print(f"🔍 DEBUG: Calling similarity_search with k=5...")
         retrieved_docs = vector_store.similarity_search(query, k=5)
+        print(f"🔍 DEBUG: Retrieved {len(retrieved_docs)} documents from similarity search")
+        
+        # Debug: Print first few docs
+        for i, doc in enumerate(retrieved_docs[:2]):
+            print(f"🔍 DEBUG: Doc {i+1} - Title: {doc.metadata.get('title', 'No title')}")
+            print(f"🔍 DEBUG: Doc {i+1} - Content preview: {doc.page_content[:100]}...")
         
         # If we have enhanced vector store, try additional searches for better coverage
         if hasattr(vector_store, 'search_by_metadata') and len(retrieved_docs) < 3:
+            print(f"🔍 DEBUG: Trying metadata search (found {len(retrieved_docs)} docs so far)...")
             # Extract potential book/document titles from query
             query_lower = query.lower()
             potential_titles = []
@@ -154,15 +167,19 @@ def retrieve(query: str):
                 matches = re.findall(pattern, query, re.IGNORECASE)
                 potential_titles.extend(matches)
             
+            print(f"🔍 DEBUG: Potential titles found: {potential_titles}")
+            
             # Try metadata search for potential titles
             for title in potential_titles[:3]:  # Limit to avoid too many searches
                 title_clean = title.strip().strip('"\'')
                 if len(title_clean) > 2:
                     try:
+                        print(f"🔍 DEBUG: Searching metadata for title: '{title_clean}'")
                         # Search by title in metadata
                         metadata_results = vector_store.search_by_metadata(
                             {"title": title_clean}, limit=3
                         )
+                        print(f"🔍 DEBUG: Metadata search returned {len(metadata_results)} results")
                         
                         # Convert metadata results to Document objects
                         for result in metadata_results:
@@ -179,7 +196,7 @@ def retrieve(query: str):
                                 )
                                 retrieved_docs.append(doc)
                     except Exception as e:
-                        print(f"Metadata search failed for '{title_clean}': {e}")
+                        print(f"🔍 DEBUG: Metadata search failed for '{title_clean}': {e}")
         
         # Remove duplicates based on content
         unique_docs = []
@@ -191,6 +208,7 @@ def retrieve(query: str):
                 unique_docs.append(doc)
         
         retrieved_docs = unique_docs[:8]  # Limit to 8 total documents
+        print(f"🔍 DEBUG: Final document count after deduplication: {len(retrieved_docs)}")
         
         # Enhanced serialization with better source information
         serialized_parts = []
@@ -218,13 +236,14 @@ def retrieve(query: str):
         
     except Exception as e:
         error_msg = str(e)
+        print(f"🔍 DEBUG: Exception in retrieve: {error_msg}")
         if "does not exist" in error_msg.lower() or "relation" in error_msg.lower():
             return f"Error: The documents table doesn't exist yet. Please upload some documents first or run the database setup SQL script. Details: {error_msg}", []
         else:
             return f"Error retrieving documents: {error_msg}", []
 
 # combining all tools
-tools = [retrieve]
+tools = [retrieve, debug_search]  # Temporarily enable debug tool
 
 # Add debug tool for testing
 @tool(response_format="content_and_artifact")

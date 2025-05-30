@@ -389,10 +389,16 @@ class EnhancedSupabaseVectorStore(SupabaseVectorStore):
         Returns:
             List of (Document, score) tuples
         """
+        print(f"🔍 VECTOR DEBUG: similarity_search_with_score_by_vector called with k={k}")
+        print(f"🔍 VECTOR DEBUG: Function name: {self.query_name}")
+        print(f"🔍 VECTOR DEBUG: Table name: {self.table_name}")
+        
         try:
             # Call the Supabase function with correct parameter order
             # Your function expects: match_documents_enhanced(match_count, match_threshold, query_embedding)
-            match_threshold = kwargs.get("match_threshold", 0.78)
+            match_threshold = kwargs.get("match_threshold", 0.0)
+            
+            print(f"🔍 VECTOR DEBUG: Trying first parameter order - match_count={k}, match_threshold={match_threshold}")
             
             result = self._client.rpc(
                 self.query_name,
@@ -403,8 +409,12 @@ class EnhancedSupabaseVectorStore(SupabaseVectorStore):
                 }
             ).execute()
             
+            print(f"🔍 VECTOR DEBUG: First attempt successful! Got {len(result.data)} results")
+            
             docs_with_scores = []
-            for row in result.data:
+            for i, row in enumerate(result.data):
+                print(f"🔍 VECTOR DEBUG: Processing row {i+1}: title='{row.get('title', 'No title')}', similarity={row.get('similarity', 0.0)}")
+                
                 # Create Document object
                 doc = Document(
                     page_content=row["content"],
@@ -431,24 +441,27 @@ class EnhancedSupabaseVectorStore(SupabaseVectorStore):
                 score = row.get("similarity", 0.0)
                 docs_with_scores.append((doc, score))
             
+            print(f"🔍 VECTOR DEBUG: Returning {len(docs_with_scores)} documents with scores")
             return docs_with_scores
             
         except Exception as e:
-            print(f"Error in similarity search: {e}")
-            print(f"Function name: {self.query_name}")
-            print(f"Parameters: match_count={k}, match_threshold={match_threshold}")
+            print(f"🔍 VECTOR DEBUG: First attempt failed: {e}")
+            print(f"🔍 VECTOR DEBUG: Function name: {self.query_name}")
+            print(f"🔍 VECTOR DEBUG: Parameters: match_count={k}, match_threshold={match_threshold}")
             
             # Try alternative parameter order if the first one fails
             try:
-                print("Trying alternative parameter order...")
+                print("🔍 VECTOR DEBUG: Trying alternative parameter order...")
                 result = self._client.rpc(
                     self.query_name,
                     {
                         "query_embedding": embedding,
                         "match_count": k,
-                        "match_threshold": match_threshold
+                        "match_threshold": match_threshold  # Use the same threshold as above
                     }
                 ).execute()
+                
+                print(f"🔍 VECTOR DEBUG: Alternative attempt successful! Got {len(result.data)} results")
                 
                 docs_with_scores = []
                 for row in result.data:
@@ -480,7 +493,7 @@ class EnhancedSupabaseVectorStore(SupabaseVectorStore):
                 return docs_with_scores
                 
             except Exception as e2:
-                print(f"Both parameter orders failed: {e2}")
+                print(f"🔍 VECTOR DEBUG: Both parameter orders failed: {e2}")
                 return []
 
     def similarity_search(
@@ -497,33 +510,44 @@ class EnhancedSupabaseVectorStore(SupabaseVectorStore):
         Returns:
             List of Document objects
         """
+        print(f"🔍 VECTOR DEBUG: similarity_search called with query='{query}', k={k}")
+        
         try:
             # Get embedding for the query
             if hasattr(self, '_embedding'):
                 embedding_model = self._embedding
+                print(f"🔍 VECTOR DEBUG: Using _embedding attribute")
             elif hasattr(self, 'embedding'):
                 embedding_model = self.embedding
+                print(f"🔍 VECTOR DEBUG: Using embedding attribute")
             else:
                 raise AttributeError("No embedding model found")
             
+            print(f"🔍 VECTOR DEBUG: Generating embedding for query...")
             query_embedding = embedding_model.embed_query(query)
+            print(f"🔍 VECTOR DEBUG: Generated embedding with {len(query_embedding)} dimensions")
             
             # Use our custom similarity search with score
+            print(f"🔍 VECTOR DEBUG: Calling similarity_search_with_score_by_vector...")
             docs_with_scores = self.similarity_search_with_score_by_vector(
                 query_embedding, k=k, **kwargs
             )
             
+            print(f"🔍 VECTOR DEBUG: Got {len(docs_with_scores)} docs with scores")
+            
             # Return just the documents (without scores)
-            return [doc for doc, score in docs_with_scores]
+            docs = [doc for doc, score in docs_with_scores]
+            print(f"🔍 VECTOR DEBUG: Returning {len(docs)} documents")
+            return docs
             
         except Exception as e:
-            print(f"Error in similarity_search: {e}")
+            print(f"🔍 VECTOR DEBUG: Error in similarity_search: {e}")
             # Fallback to parent method if our custom method fails
             try:
-                print("Falling back to parent similarity_search method...")
+                print("🔍 VECTOR DEBUG: Falling back to parent similarity_search method...")
                 return super().similarity_search(query, k=k, **kwargs)
             except Exception as e2:
-                print(f"Parent method also failed: {e2}")
+                print(f"🔍 VECTOR DEBUG: Parent method also failed: {e2}")
                 return []
 
 

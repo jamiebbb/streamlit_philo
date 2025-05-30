@@ -375,6 +375,114 @@ class EnhancedSupabaseVectorStore(SupabaseVectorStore):
             print(f"Error getting document stats: {e}")
             return {"total_documents": 0, "by_type": {}, "by_difficulty": {}}
 
+    def similarity_search_with_score_by_vector(
+        self, embedding: List[float], k: int = 4, **kwargs
+    ) -> List[tuple]:
+        """
+        Override parent method to handle correct function parameter order.
+        
+        Args:
+            embedding: Query embedding vector
+            k: Number of documents to return
+            **kwargs: Additional arguments
+            
+        Returns:
+            List of (Document, score) tuples
+        """
+        try:
+            # Call the Supabase function with correct parameter order
+            # Your function expects: match_documents_enhanced(match_count, match_threshold, query_embedding)
+            match_threshold = kwargs.get("match_threshold", 0.78)
+            
+            result = self._client.rpc(
+                self.query_name,
+                {
+                    "match_count": k,
+                    "match_threshold": match_threshold,
+                    "query_embedding": embedding
+                }
+            ).execute()
+            
+            docs_with_scores = []
+            for row in result.data:
+                # Create Document object
+                doc = Document(
+                    page_content=row["content"],
+                    metadata=row.get("metadata", {})
+                )
+                
+                # Add enhanced metadata to the document metadata
+                doc.metadata.update({
+                    "title": row.get("title"),
+                    "author": row.get("author"),
+                    "doc_type": row.get("doc_type"),
+                    "genre": row.get("genre"),
+                    "topic": row.get("topic"),
+                    "difficulty": row.get("difficulty"),
+                    "tags": row.get("tags"),
+                    "source_type": row.get("source_type"),
+                    "summary": row.get("summary"),
+                    "chunk_id": row.get("chunk_id"),
+                    "total_chunks": row.get("total_chunks"),
+                    "source": row.get("source")
+                })
+                
+                # Get similarity score
+                score = row.get("similarity", 0.0)
+                docs_with_scores.append((doc, score))
+            
+            return docs_with_scores
+            
+        except Exception as e:
+            print(f"Error in similarity search: {e}")
+            print(f"Function name: {self.query_name}")
+            print(f"Parameters: match_count={k}, match_threshold={match_threshold}")
+            
+            # Try alternative parameter order if the first one fails
+            try:
+                print("Trying alternative parameter order...")
+                result = self._client.rpc(
+                    self.query_name,
+                    {
+                        "query_embedding": embedding,
+                        "match_count": k,
+                        "match_threshold": match_threshold
+                    }
+                ).execute()
+                
+                docs_with_scores = []
+                for row in result.data:
+                    doc = Document(
+                        page_content=row["content"],
+                        metadata=row.get("metadata", {})
+                    )
+                    
+                    # Add enhanced metadata
+                    doc.metadata.update({
+                        "title": row.get("title"),
+                        "author": row.get("author"),
+                        "doc_type": row.get("doc_type"),
+                        "genre": row.get("genre"),
+                        "topic": row.get("topic"),
+                        "difficulty": row.get("difficulty"),
+                        "tags": row.get("tags"),
+                        "source_type": row.get("source_type"),
+                        "summary": row.get("summary"),
+                        "chunk_id": row.get("chunk_id"),
+                        "total_chunks": row.get("total_chunks"),
+                        "source": row.get("source")
+                    })
+                    
+                    score = row.get("similarity", 0.0)
+                    docs_with_scores.append((doc, score))
+                
+                print("✅ Alternative parameter order worked!")
+                return docs_with_scores
+                
+            except Exception as e2:
+                print(f"Both parameter orders failed: {e2}")
+                return []
+
 
 def create_enhanced_vector_store(supabase_client: Client, embeddings, table_name: str = "documents_enhanced"):
     """

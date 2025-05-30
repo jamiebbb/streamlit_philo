@@ -244,6 +244,269 @@ tools = [retrieve]  # Removed debug tool to fix NameError
 # Add debug tool for testing (commented out to prevent errors)
 # tools.append(debug_search)
 
+# YouTube processing functions (moved to global scope)
+def extract_video_id(url):
+    """Extract the video ID from a YouTube URL."""
+    import re
+    patterns = [
+        r'(?:v=|\/)([0-9A-Za-z_-]{11}).*',  # Standard YouTube URLs
+        r'(?:embed\/)([0-9A-Za-z_-]{11})',  # Embedded URLs
+        r'(?:youtu\.be\/)([0-9A-Za-z_-]{11})'  # Shortened youtu.be URLs
+    ]
+    
+    for pattern in patterns:
+        match = re.search(pattern, url)
+        if match:
+            return match.group(1)
+    return None
+
+def get_youtube_metadata(video_id):
+    """Get video metadata from YouTube."""
+    try:
+        import requests
+        import re
+        
+        metadata = {
+            "video_id": video_id,
+            "source_url": f"https://www.youtube.com/watch?v={video_id}",
+            "source_type": "youtube_video"
+        }
+        
+        # Fetch the video page to extract title and channel info
+        url = f"https://www.youtube.com/watch?v={video_id}"
+        response = requests.get(url)
+        
+        if response.status_code == 200:
+            html_content = response.text
+            
+            # Extract title
+            title_match = re.search(r'<meta name="title" content="([^"]+)"', html_content)
+            if title_match:
+                metadata["title"] = title_match.group(1)
+            else:
+                metadata["title"] = f"YouTube Video {video_id}"
+                
+            # Extract channel name
+            channel_match = re.search(r'<link itemprop="name" content="([^"]+)"', html_content)
+            if channel_match:
+                metadata["youtube_channel"] = channel_match.group(1)
+            else:
+                channel_match2 = re.search(r'"author":"([^"]+)"', html_content)
+                if channel_match2:
+                    metadata["youtube_channel"] = channel_match2.group(1)
+                else:
+                    metadata["youtube_channel"] = "Unknown Channel"
+        else:
+            metadata["title"] = f"YouTube Video {video_id}"
+            metadata["youtube_channel"] = "Unknown Channel"
+        
+        return metadata
+    except Exception as e:
+        st.error(f"Error fetching video metadata: {e}")
+        return {
+            "title": f"YouTube Video {video_id}",
+            "youtube_channel": "Unknown Channel",
+            "video_id": video_id,
+            "source_url": f"https://www.youtube.com/watch?v={video_id}",
+            "source_type": "youtube_video"
+        }
+
+def get_youtube_transcript(video_id):
+    """Get transcript using Supadata API."""
+    try:
+        import requests
+        
+        # Supadata API configuration
+        SUPADATA_API_URL = "https://api.supadata.ai"
+        SUPADATA_TRANSCRIPT_ENDPOINT = "/v1/youtube/transcript"
+        SUPADATA_API_KEY = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiIsImtpZCI6IjEifQ.eyJpc3MiOiJuYWRsZXMiLCJpYXQiOiIxNzQ3OTIwNTIyIiwicHVycG9zZSI6ImFwaV9hdXRoZW50aWNhdGlvbiIsInN1YiI6IjEwMjk3YjAyYThlZjRhOTdhNmFjNjUwNjYxYWVlZjNiIn0.5OwI0aFR_BfgrDp2c55muHS9OyVX6XxHHPhULTzqdRY"
+        
+        api_url = f"{SUPADATA_API_URL}{SUPADATA_TRANSCRIPT_ENDPOINT}"
+        
+        params = {"videoId": video_id}
+        headers = {"X-API-Key": SUPADATA_API_KEY}
+        
+        response = requests.get(api_url, params=params, headers=headers)
+        
+        if response.status_code == 200:
+            data = response.json()
+            if "content" in data:
+                transcript = " ".join([segment.get("text", "") for segment in data.get("content", [])])
+                return transcript
+            else:
+                return None
+        else:
+            st.error(f"Supadata API error: Status code {response.status_code}")
+            return None
+            
+    except Exception as e:
+        st.error(f"Error getting transcript: {e}")
+        return None
+
+def clean_youtube_transcript(transcript):
+    """Clean and format transcript using GPT-4o-mini."""
+    try:
+        system_prompt = """You are an expert in grammar corrections and textual structuring.
+
+Correct the classification of the provided text, adding commas, periods, question marks and other symbols necessary for natural and consistent reading. Do not change any words, just adjust the punctuation according to the grammatical rules and context.
+
+Organize your content using markdown, structuring it with titles, subtitles, lists or other protected elements to clearly highlight the topics and information captured. Leave it in English and remember to always maintain the original formatting.
+
+Textual organization should always be a priority according to the content of the text, as well as the appropriate title, which must make sense."""
+        
+        # Limit transcript length
+        max_content_length = 12000
+        if len(transcript) > max_content_length:
+            transcript = transcript[:max_content_length] + "\n\n[Transcript truncated due to length]"
+        
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"Here is a YouTube transcript that needs cleaning and formatting:\n\n{transcript}"}
+        ]
+        
+        response = llm.invoke(messages)
+        return response.content
+        
+    except Exception as e:
+        st.error(f"Error cleaning transcript: {e}")
+        return transcript
+
+def generate_youtube_metadata(title, transcript_sample, video_metadata):
+    """Generate enhanced metadata for YouTube video."""
+    try:
+        system_message = """You are a metadata expert who creates high-quality content summaries and tags for YouTube videos.
+Follow these instructions carefully:
+1. Create a concise summary using clear, concise language with active voice
+2. Identify the genre/topic and content type
+3. Identify the ACTUAL AUTHOR of the content (not the YouTube channel) from the title and content
+4. Assign a difficulty rating (Beginner, Intermediate, Advanced, Expert) based on complexity and target audience
+5. Generate relevant tags that would be useful in a chatbot context
+
+Format your response exactly as follows:
+Summary: [Your summary here]
+Genre: [Genre]
+Topic: [Topic]
+Type: [Content type - should be "Video"]
+Author: [The actual author/speaker of the content, not the YouTube channel]
+Tags: [tag1, tag2, tag3, etc.]
+Difficulty: [Beginner/Intermediate/Advanced/Expert]"""
+        
+        messages = [
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": f"Generate metadata for YouTube video titled '{title}' with this transcript sample: {transcript_sample[:1500]}..."}
+        ]
+        
+        response = llm.invoke(messages)
+        response_text = response.content
+        
+        # Parse response
+        import re
+        metadata_dict = {}
+        try:
+            metadata_dict["summary"] = re.search(r"Summary: (.*?)(?:\n|$)", response_text, re.DOTALL).group(1).strip()
+            metadata_dict["genre"] = re.search(r"Genre: (.*?)(?:\n|$)", response_text).group(1).strip()
+            metadata_dict["topic"] = re.search(r"Topic: (.*?)(?:\n|$)", response_text).group(1).strip()
+            metadata_dict["type"] = re.search(r"Type: (.*?)(?:\n|$)", response_text).group(1).strip()
+            metadata_dict["author"] = re.search(r"Author: (.*?)(?:\n|$)", response_text).group(1).strip()
+            metadata_dict["tags"] = re.search(r"Tags: (.*?)(?:\n|$)", response_text).group(1).strip()
+            metadata_dict["difficulty"] = re.search(r"Difficulty: (.*?)(?:\n|$)", response_text).group(1).strip()
+            
+            # Add video metadata
+            for key, value in video_metadata.items():
+                if key != "author":  # Don't overwrite author with channel name
+                    metadata_dict[key] = value
+            
+            metadata_dict["youtube_channel"] = video_metadata.get("youtube_channel", "Unknown Channel")
+            
+        except (AttributeError, Exception) as e:
+            st.error(f"Error parsing metadata: {e}")
+            # Fallback metadata
+            metadata_dict = {
+                "summary": "Summary extraction failed",
+                "genre": "Educational",
+                "topic": "Unknown",
+                "type": "Video",
+                "author": "Unknown",
+                "tags": "youtube, video",
+                "difficulty": "Intermediate"
+            }
+            metadata_dict.update(video_metadata)
+        
+        return metadata_dict
+        
+    except Exception as e:
+        st.error(f"Error generating metadata: {e}")
+        return video_metadata
+
+def process_youtube_video(video_id, transcript, title, author, summary, genre, topic, tags, difficulty, original_metadata, chunk_size, chunk_overlap):
+    """Process YouTube video: chunk, embed, and save to both CSV and Supabase."""
+    try:
+        import pandas as pd
+        from langchain.text_splitter import RecursiveCharacterTextSplitter
+        from langchain_core.documents import Document
+        
+        # Create text splitter
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            length_function=len,
+        )
+        
+        # Create metadata for the video
+        video_metadata = {
+            "title": title,
+            "author": author,
+            "type": "Video",
+            "genre": genre,
+            "topic": topic,
+            "tags": tags,
+            "difficulty": difficulty,
+            "summary": summary,
+            "source_type": "youtube_video",
+            "video_id": video_id,
+            "youtube_url": f"https://www.youtube.com/watch?v={video_id}",
+            "youtube_channel": original_metadata.get("youtube_channel", "Unknown Channel")
+        }
+        
+        # Split transcript into chunks
+        chunks = text_splitter.split_text(transcript)
+        
+        # Create Document objects
+        documents = []
+        for i, chunk in enumerate(chunks):
+            chunk_metadata = video_metadata.copy()
+            chunk_metadata.update({
+                "chunk_id": i + 1,
+                "total_chunks": len(chunks),
+                "source": f"https://www.youtube.com/watch?v={video_id}"
+            })
+            
+            doc = Document(page_content=chunk, metadata=chunk_metadata)
+            documents.append(doc)
+        
+        # Add to vector store
+        if vector_store:
+            try:
+                doc_ids = vector_store.add_documents(documents)
+                st.success(f"✅ Added {len(documents)} chunks to vector store")
+            except Exception as e:
+                st.error(f"Failed to add to vector store: {e}")
+                return False
+        
+        # Add to CSV tracker
+        try:
+            add_document_to_csv(title, len(chunks), author, "Video", genre, difficulty, "youtube_video", tags, summary, topic)
+            st.success("📄 Added to document tracker CSV")
+        except Exception as e:
+            st.error(f"Failed to add to CSV: {e}")
+            return False
+        
+        return True
+        
+    except Exception as e:
+        st.error(f"Error processing YouTube video: {e}")
+        return False
+
 # initiating the agent
 agent = create_tool_calling_agent(llm, tools, prompt)
 
@@ -2009,291 +2272,4 @@ with tab3:
                     st.success(f"✅ Uploaded CSV with {len(df)} documents")
                 except Exception as e:
                     st.error(f"Error uploading CSV: {e}")
-
-    # YouTube processing functions
-    def extract_video_id(url):
-        """Extract the video ID from a YouTube URL."""
-        import re
-        patterns = [
-            r'(?:v=|\/)([0-9A-Za-z_-]{11}).*',  # Standard YouTube URLs
-            r'(?:embed\/)([0-9A-Za-z_-]{11})',  # Embedded URLs
-            r'(?:youtu\.be\/)([0-9A-Za-z_-]{11})'  # Shortened youtu.be URLs
-        ]
-        
-        for pattern in patterns:
-            match = re.search(pattern, url)
-            if match:
-                return match.group(1)
-        return None
-
-    def get_youtube_metadata(video_id):
-        """Get video metadata from YouTube."""
-        try:
-            import requests
-            import re
-            
-            metadata = {
-                "video_id": video_id,
-                "source_url": f"https://www.youtube.com/watch?v={video_id}",
-                "source_type": "youtube_video"
-            }
-            
-            # Fetch the video page to extract title and channel info
-            url = f"https://www.youtube.com/watch?v={video_id}"
-            response = requests.get(url)
-            
-            if response.status_code == 200:
-                html_content = response.text
-                
-                # Extract title
-                title_match = re.search(r'<meta name="title" content="([^"]+)"', html_content)
-                if title_match:
-                    metadata["title"] = title_match.group(1)
-                else:
-                    metadata["title"] = f"YouTube Video {video_id}"
-                    
-                # Extract channel name
-                channel_match = re.search(r'<link itemprop="name" content="([^"]+)"', html_content)
-                if channel_match:
-                    metadata["youtube_channel"] = channel_match.group(1)
-                else:
-                    channel_match2 = re.search(r'"author":"([^"]+)"', html_content)
-                    if channel_match2:
-                        metadata["youtube_channel"] = channel_match2.group(1)
-                    else:
-                        metadata["youtube_channel"] = "Unknown Channel"
-            else:
-                metadata["title"] = f"YouTube Video {video_id}"
-                metadata["youtube_channel"] = "Unknown Channel"
-            
-            return metadata
-        except Exception as e:
-            st.error(f"Error fetching video metadata: {e}")
-            return {
-                "title": f"YouTube Video {video_id}",
-                "youtube_channel": "Unknown Channel",
-                "video_id": video_id,
-                "source_url": f"https://www.youtube.com/watch?v={video_id}",
-                "source_type": "youtube_video"
-            }
-
-    def get_youtube_transcript(video_id):
-        """Get transcript using Supadata API."""
-        try:
-            import requests
-            
-            # Supadata API configuration
-            SUPADATA_API_URL = "https://api.supadata.ai"
-            SUPADATA_TRANSCRIPT_ENDPOINT = "/v1/youtube/transcript"
-            SUPADATA_API_KEY = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiIsImtpZCI6IjEifQ.eyJpc3MiOiJuYWRsZXMiLCJpYXQiOiIxNzQ3OTIwNTIyIiwicHVycG9zZSI6ImFwaV9hdXRoZW50aWNhdGlvbiIsInN1YiI6IjEwMjk3YjAyYThlZjRhOTdhNmFjNjUwNjYxYWVlZjNiIn0.5OwI0aFR_BfgrDp2c55muHS9OyVX6XxHHPhULTzqdRY"
-            
-            api_url = f"{SUPADATA_API_URL}{SUPADATA_TRANSCRIPT_ENDPOINT}"
-            
-            params = {"videoId": video_id}
-            headers = {"X-API-Key": SUPADATA_API_KEY}
-            
-            response = requests.get(api_url, params=params, headers=headers)
-            
-            if response.status_code == 200:
-                data = response.json()
-                if "content" in data:
-                    transcript = " ".join([segment.get("text", "") for segment in data.get("content", [])])
-                    return transcript
-                else:
-                    return None
-            else:
-                st.error(f"Supadata API error: Status code {response.status_code}")
-                return None
-                
-        except Exception as e:
-            st.error(f"Error getting transcript: {e}")
-            return None
-
-    def clean_youtube_transcript(transcript):
-        """Clean and format transcript using GPT-4o-mini."""
-        try:
-            system_prompt = """You are an expert in grammar corrections and textual structuring.
-
-Correct the classification of the provided text, adding commas, periods, question marks and other symbols necessary for natural and consistent reading. Do not change any words, just adjust the punctuation according to the grammatical rules and context.
-
-Organize your content using markdown, structuring it with titles, subtitles, lists or other protected elements to clearly highlight the topics and information captured. Leave it in English and remember to always maintain the original formatting.
-
-Textual organization should always be a priority according to the content of the text, as well as the appropriate title, which must make sense."""
-            
-            # Limit transcript length
-            max_content_length = 12000
-            if len(transcript) > max_content_length:
-                transcript = transcript[:max_content_length] + "\n\n[Transcript truncated due to length]"
-            
-            messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Here is a YouTube transcript that needs cleaning and formatting:\n\n{transcript}"}
-            ]
-            
-            response = llm.invoke(messages)
-            return response.content
-            
-        except Exception as e:
-            st.error(f"Error cleaning transcript: {e}")
-            return transcript
-
-    def generate_youtube_metadata(title, transcript_sample, video_metadata):
-        """Generate enhanced metadata for YouTube video."""
-        try:
-            system_message = """You are a metadata expert who creates high-quality content summaries and tags for YouTube videos.
-Follow these instructions carefully:
-1. Create a concise summary using clear, concise language with active voice
-2. Identify the genre/topic and content type
-3. Identify the ACTUAL AUTHOR of the content (not the YouTube channel) from the title and content
-4. Assign a difficulty rating (Beginner, Intermediate, Advanced, Expert) based on complexity and target audience
-5. Generate relevant tags that would be useful in a chatbot context
-
-Format your response exactly as follows:
-Summary: [Your summary here]
-Genre: [Genre]
-Topic: [Topic]
-Type: [Content type - should be "Video"]
-Author: [The actual author/speaker of the content, not the YouTube channel]
-Tags: [tag1, tag2, tag3, etc.]
-Difficulty: [Beginner/Intermediate/Advanced/Expert]"""
-            
-            messages = [
-                {"role": "system", "content": system_message},
-                {"role": "user", "content": f"Generate metadata for YouTube video titled '{title}' with this transcript sample: {transcript_sample[:1500]}..."}
-            ]
-            
-            response = llm.invoke(messages)
-            response_text = response.content
-            
-            # Parse response
-            import re
-            metadata_dict = {}
-            try:
-                metadata_dict["summary"] = re.search(r"Summary: (.*?)(?:\n|$)", response_text, re.DOTALL).group(1).strip()
-                metadata_dict["genre"] = re.search(r"Genre: (.*?)(?:\n|$)", response_text).group(1).strip()
-                metadata_dict["topic"] = re.search(r"Topic: (.*?)(?:\n|$)", response_text).group(1).strip()
-                metadata_dict["type"] = re.search(r"Type: (.*?)(?:\n|$)", response_text).group(1).strip()
-                metadata_dict["author"] = re.search(r"Author: (.*?)(?:\n|$)", response_text).group(1).strip()
-                metadata_dict["tags"] = re.search(r"Tags: (.*?)(?:\n|$)", response_text).group(1).strip()
-                metadata_dict["difficulty"] = re.search(r"Difficulty: (.*?)(?:\n|$)", response_text).group(1).strip()
-                
-                # Add video metadata
-                for key, value in video_metadata.items():
-                    if key != "author":  # Don't overwrite author with channel name
-                        metadata_dict[key] = value
-                
-                metadata_dict["youtube_channel"] = video_metadata.get("youtube_channel", "Unknown Channel")
-                
-            except (AttributeError, Exception) as e:
-                st.error(f"Error parsing metadata: {e}")
-                # Fallback metadata
-                metadata_dict = {
-                    "summary": "Summary extraction failed",
-                    "genre": "Educational",
-                    "topic": "Unknown",
-                    "type": "Video",
-                    "author": "Unknown",
-                    "tags": "youtube, video",
-                    "difficulty": "Intermediate"
-                }
-                metadata_dict.update(video_metadata)
-            
-            return metadata_dict
-            
-        except Exception as e:
-            st.error(f"Error generating metadata: {e}")
-            return video_metadata
-
-    def process_youtube_video(video_id, transcript, title, author, summary, genre, topic, tags, difficulty, original_metadata, chunk_size, chunk_overlap):
-        """Process YouTube video: chunk, embed, and save to both CSV and Supabase."""
-        try:
-            from langchain.text_splitter import RecursiveCharacterTextSplitter
-            from langchain_core.documents import Document
-            
-            # Create document metadata
-            metadata = {
-                "title": title,
-                "author": author,
-                "summary": summary,
-                "type": "Video",
-                "genre": genre,
-                "topic": topic,
-                "tags": tags,
-                "difficulty": difficulty,
-                "source_type": "YouTube",
-                "video_id": video_id,
-                "youtube_channel": original_metadata.get("youtube_channel", "Unknown"),
-                "source_url": f"https://www.youtube.com/watch?v={video_id}",
-                "source": f"YouTube: {title}"
-            }
-            
-            # Split text into chunks with user-specified parameters
-            text_splitter = RecursiveCharacterTextSplitter(
-                chunk_size=chunk_size,
-                chunk_overlap=chunk_overlap,
-                length_function=len,
-            )
-            
-            # Create document object
-            doc = Document(page_content=transcript, metadata=metadata)
-            
-            # Split into chunks
-            chunks = text_splitter.split_documents([doc])
-            
-            # Add chunk-specific metadata
-            for i, chunk in enumerate(chunks):
-                chunk.metadata.update({
-                    "chunk_id": i,
-                    "total_chunks": len(chunks)
-                })
-            
-            # Add to vector store (Supabase)
-            with st.spinner(f"Embedding {len(chunks)} chunks..."):
-                vector_store.add_documents(chunks)
-            
-            # Add to document tracker CSV
-            source_url = f"https://www.youtube.com/watch?v={video_id}"
-            
-            doc_id = document_tracker.add_document_record(
-                title=title,
-                author=author,
-                summary=summary,
-                doc_type="Video",
-                genre=genre,
-                topic=topic,
-                difficulty=difficulty,
-                source_type="YouTube",
-                tags=tags,
-                chunks=len(chunks),
-                chunk_size=chunk_size,
-                chunk_overlap=chunk_overlap,
-                source_url=source_url,
-                video_id=video_id
-            )
-            
-            # Also update the legacy CSV for backward compatibility
-            success = add_document_to_csv(
-                title=title,
-                chunks=len(chunks),
-                author=author,
-                doc_type="Video",
-                genre=genre,
-                difficulty=difficulty,
-                source_type="YouTube",
-                tags=tags,
-                summary=summary,
-                topic=topic
-            )
-            
-            if doc_id and success:
-                st.success(f"✅ Added {len(chunks)} chunks to vector store and updated tracking systems")
-                st.info(f"📄 Document tracker updated with new entry")
-                return True
-            else:
-                st.error("Failed to update tracking systems")
-                return False
-                
-        except Exception as e:
-            st.error(f"Error processing YouTube video: {e}")
-            return False
 
